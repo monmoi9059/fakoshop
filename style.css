@@ -1,0 +1,147 @@
+:root {
+    --bg-dark: #2b2b2b;
+    --bg-panel: #323232;
+    --bg-tool: #4a4a4a;
+    --text-main: #d9d9d9;
+    --accent: #0078d7;
+    --border: #1e1e1e;
+}
+
+* { box-sizing: border-box; user-select: none; }
+
+body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--bg-dark);
+    color: var(--text-main);
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Menu Bar */
+#menubar {
+    height: 30px;
+    background-color: #1f1f1f;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    font-size: 13px;
+    border-bottom: 1px solid #000;
+}
+.menu-item { padding: 5px 10px; cursor: pointer; }
+.menu-item:hover { background-color: var(--accent); color: white; }
+
+/* Main Workspace */
+#workspace {
+    display: flex;
+    flex: 1;
+    height: calc(100% - 30px);
+}
+
+/* Toolbar (Left) */
+#toolbar {
+    width: 50px;
+    background-color: var(--bg-panel);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 5px;
+}
+.tool {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    margin-bottom: 2px;
+    border-radius: 3px;
+    font-size: 18px;
+    color: #b0b0b0;
+}
+.tool:hover { background-color: var(--bg-tool); }
+.tool.active { background-color: var(--bg-tool); border-left: 2px solid var(--accent); color: white; }
+
+/* Options Bar (Top of Workspace) */
+#options-bar {
+    height: 35px;
+    background-color: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 15px;
+    gap: 15px;
+    font-size: 12px;
+}
+
+/* Canvas Area (Center) */
+#canvas-area {
+    flex: 1;
+    background-color: #1e1e1e;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: auto;
+    position: relative;
+}
+#main-canvas {
+    background-color: white;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    cursor: crosshair;
+}
+
+/* Panels (Right) */
+#panels {
+    width: 260px;
+    background-color: var(--bg-panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+}
+.panel-header {
+    padding: 8px 10px;
+    background-color: #252525;
+    font-size: 12px;
+    font-weight: bold;
+    border-bottom: 1px solid var(--border);
+    border-top: 1px solid var(--border);
+}
+.panel-content { padding: 15px; }
+
+/* Controls */
+input[type="range"] { width: 100%; cursor: pointer; }
+input[type="color"] { border: none; width: 30px; height: 30px; cursor: pointer; background: none; }
+button {
+    background-color: #4a4a4a; border: 1px solid #1e1e1e;
+    color: white; padding: 5px 10px; cursor: pointer; width: 100%; margin-top: 5px; font-size: 11px;
+}
+button:hover { background-color: #5a5a5a; }
+
+/* Layers Panel */
+#layer-list {
+    flex: 1;
+    overflow-y: auto;
+    background-color: #2b2b2b;
+}
+.layer-item {
+    padding: 10px;
+    border-bottom: 1px solid #383838;
+    background-color: #323232;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+}
+.layer-item.active { background-color: #454545; }
+.layer-eye { margin-right: 10px; color: #aaa; cursor: pointer; }
+
+/* Utility classes */
+.hidden { display: none !important; }
+
+/* Custom input styling for realism */
+.input-group { margin-bottom: 10px; }
+.input-label { display: block; margin-bottom: 5px; font-size: 11px; color: #aaa; }
