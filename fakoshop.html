@@ -1213,8 +1213,10 @@ function renderLayerList() {
 
 // --- Event Listeners ---
 mainCanvas.addEventListener('mousedown', startPosition);
-mainCanvas.addEventListener('mouseup', endPosition);
+// Bind mouseup to window to ensure we catch it even if dragged outside canvas
+window.addEventListener('mouseup', endPosition);
 mainCanvas.addEventListener('mousemove', draw);
+mainCanvas.addEventListener('mouseleave', endPosition); // Stop drawing if mouse leaves canvas bounds
 mainCanvas.addEventListener('click', handleCanvasClick);
 mainCanvas.addEventListener('wheel', handleWheel); // Zoom support
 mainCanvas.addEventListener('dblclick', handleDoubleClick); // Crop confirmation
