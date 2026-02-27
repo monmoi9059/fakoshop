@@ -2589,12 +2589,11 @@ function setTool(tool) {
     if (tool !== 'poly-lasso') polygonPoints = [];
 
     document.querySelectorAll('.tool').forEach(el => el.classList.remove('active'));
-    const map = {
-        'brush': 0, 'eraser': 1, 'clone': 2, 'move': 3, 'fill': 4, 'gradient': 5, 'wand': 6, 'picker': 7, 'crop': 8,
-        'rect': 9, 'circle': 10, 'line': 11, 'text': 12, 'marquee': 13, 'lasso': 14, 'poly-lasso': 15
-    };
-    if (document.querySelectorAll('.tool')[map[tool]]) {
-        document.querySelectorAll('.tool')[map[tool]].classList.add('active');
+
+    // Find the tool element that matches the tool string and add active class
+    const toolEl = document.querySelector(`.tool[onclick="setTool('${tool}')"]`);
+    if (toolEl) {
+        toolEl.classList.add('active');
     }
 
     mainCanvas.style.cursor = getCursorForTool(tool);
