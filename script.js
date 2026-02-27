@@ -6,6 +6,11 @@ class Layer {
         this.visible = true;
         this.opacity = 1.0;
         this.blendMode = 'source-over';
+        this.x = 0;
+        this.y = 0;
+        this.scaleX = 1;
+        this.scaleY = 1;
+        this.rotation = 0; // in radians
 
         // Off-screen canvas for this layer
         this.canvas = document.createElement('canvas');
@@ -132,6 +137,11 @@ class HistoryManager {
                 visible: layer.visible,
                 opacity: layer.opacity,
                 blendMode: layer.blendMode,
+                x: layer.x,
+                y: layer.y,
+                scaleX: layer.scaleX || 1,
+                scaleY: layer.scaleY || 1,
+                rotation: layer.rotation || 0,
                 canvas: newCanvas
             };
         });
@@ -139,7 +149,10 @@ class HistoryManager {
         const fullState = {
             layers: state,
             activeLayerId: layerManager.activeLayerId,
-            layerCounter: layerManager.layerCounter
+            layerCounter: layerManager.layerCounter,
+            // Also save canvas dimensions for crop undo
+            width: layerManager.width,
+            height: layerManager.height
         };
 
         this.stack.push(fullState);
@@ -169,6 +182,18 @@ class HistoryManager {
     }
 
     restoreState(state) {
+        // Restore dimensions if changed (e.g. crop)
+        if (state.width !== layerManager.width || state.height !== layerManager.height) {
+            mainCanvas.width = state.width;
+            mainCanvas.height = state.height;
+            layerManager.width = state.width;
+            layerManager.height = state.height;
+            selectionManager.width = state.width;
+            selectionManager.height = state.height;
+            selectionManager.maskCanvas.width = state.width;
+            selectionManager.maskCanvas.height = state.height;
+        }
+
         // Restore LayerManager state
         layerManager.activeLayerId = state.activeLayerId;
         layerManager.layerCounter = state.layerCounter;
@@ -179,6 +204,11 @@ class HistoryManager {
             layer.visible = lData.visible;
             layer.opacity = lData.opacity;
             layer.blendMode = lData.blendMode;
+            layer.x = lData.x || 0;
+            layer.y = lData.y || 0;
+            layer.scaleX = lData.scaleX || 1;
+            layer.scaleY = lData.scaleY || 1;
+            layer.rotation = lData.rotation || 0;
             layer.ctx.drawImage(lData.canvas, 0, 0);
             return layer;
         });
@@ -228,7 +258,7 @@ class SelectionManager {
     updateSelection(x, y) {
         if (!this.hasSelection) return;
 
-        if (currentTool === 'marquee') {
+        if (currentTool === 'marquee' || currentTool === 'crop') {
             this.ctx.clearRect(0, 0, this.width, this.height);
             this.ctx.fillStyle = 'rgba(0,0,0,1)'; // Use solid color for mask logic
             this.ctx.fillRect(this.startX, this.startY, x - this.startX, y - this.startY);
@@ -259,25 +289,6 @@ class SelectionManager {
     // Apply clipping to a context based on selection
     clipContext(ctx) {
         if (!this.hasSelection) return;
-
-        // We need to create a path from the mask pixels to clip?
-        // Or easier: composite destination-in.
-        // But for drawing tools, we want to restrict drawing to the area.
-
-        // Efficient way:
-        // 1. Save context
-        // 2. Draw mask into context
-        // 3. Clip
-
-        // Actually, for real-time brush, we can just clip to the rect or path if simple.
-        // But for pixel mask, we use compositing.
-
-        // Complex approach:
-        // We will return true if the pixel at x,y is selected.
-        // But that's slow for brushes.
-
-        // Better approach for standard drawing:
-        // Use the mask canvas as a clipping region.
         ctx.globalCompositeOperation = 'destination-in';
         ctx.drawImage(this.maskCanvas, 0, 0);
         ctx.globalCompositeOperation = 'source-over';
@@ -298,6 +309,15 @@ let brushColor = '#000000';
 let brushOpacity = 1;
 let startX, startY; // For shape tools
 
+// Zoom & Pan Variables
+let zoomLevel = 1.0;
+let panX = 0;
+let panY = 0;
+let isPanning = false;
+let isSpacePressed = false;
+let lastPanX, lastPanY;
+let lastMoveX, lastMoveY; // For move tool
+
 // --- Initialization ---
 function init() {
     // Create background layer
@@ -316,6 +336,12 @@ function renderCanvas() {
     // Clear main display canvas
     mainCtx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
 
+    mainCtx.save(); // Save context state before applying transforms
+
+    // Apply Pan and Zoom
+    mainCtx.translate(panX, panY);
+    mainCtx.scale(zoomLevel, zoomLevel);
+
     // Draw pattern background (checkerboard for transparency)
     drawCheckerboard(mainCtx, mainCanvas.width, mainCanvas.height);
 
@@ -323,34 +349,63 @@ function renderCanvas() {
     layerManager.layers.forEach(layer => {
         if (!layer.visible) return;
 
+        mainCtx.save();
         mainCtx.globalAlpha = layer.opacity;
         mainCtx.globalCompositeOperation = layer.blendMode;
-        mainCtx.drawImage(layer.canvas, 0, 0);
+
+        // Apply layer transformations (Translate -> Rotate -> Scale)
+
+        // Translate to layer position
+        const centerX = (layer.x || 0) + layer.canvas.width / 2;
+        const centerY = (layer.y || 0) + layer.canvas.height / 2;
+
+        mainCtx.translate(centerX, centerY);
+        mainCtx.rotate(layer.rotation || 0);
+        mainCtx.scale(layer.scaleX || 1, layer.scaleY || 1);
+        mainCtx.translate(-centerX, -centerY);
+
+        mainCtx.drawImage(layer.canvas, layer.x || 0, layer.y || 0);
+        mainCtx.restore();
     });
 
-    // Reset context state
+    // Reset context state for overlay drawing (Selection/Crop)
     mainCtx.globalAlpha = 1.0;
     mainCtx.globalCompositeOperation = 'source-over';
 
-    // Draw Selection Outline (Marching Ants effect - simplified)
+    // Draw Selection Outline
     if (selectionManager.hasSelection) {
         mainCtx.save();
-        mainCtx.strokeStyle = '#000';
-        mainCtx.lineWidth = 1;
-        mainCtx.setLineDash([4, 4]);
+        mainCtx.lineWidth = 1 / zoomLevel;
+        mainCtx.setLineDash([4 / zoomLevel, 4 / zoomLevel]);
 
-        // Draw the boundary of the non-transparent pixels in mask
-        // For performance in this demo, we just draw the mask semitransparent red
-        // to show selected area, or just rely on the tool interaction.
-        // Let's overlay the mask slightly to visualize it.
+        if (currentTool === 'crop') {
+            // Darken area outside crop
+            mainCtx.fillStyle = 'rgba(0,0,0,0.5)';
+            mainCtx.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
 
-        mainCtx.globalAlpha = 0.2;
-        mainCtx.fillStyle = '#00f'; // Blue tint for selection
-        mainCtx.drawImage(selectionManager.maskCanvas, 0, 0);
+            // Clear the selection part to reveal image (or just draw selection border)
+            // Composite destination-out to clear hole?
+            mainCtx.globalCompositeOperation = 'destination-out';
+            mainCtx.drawImage(selectionManager.maskCanvas, 0, 0);
 
-        // If actively selecting (dragging marquee/lasso), draw that specific preview
-        if (painting && (currentTool === 'marquee' || currentTool === 'lasso')) {
-           // handled in updateSelection drawing to maskCanvas
+            // Draw crop border
+            mainCtx.globalCompositeOperation = 'source-over';
+            mainCtx.strokeStyle = '#fff';
+            mainCtx.strokeRect(selectionManager.startX, selectionManager.startY,
+                              (window.lastMouseX || selectionManager.startX) - selectionManager.startX,
+                              (window.lastMouseY || selectionManager.startY) - selectionManager.startY); // Approximation, relies on updateSelection
+
+            // Since `maskCanvas` contains the rect, we can just outline it if simple
+            // But for live drag, updateSelection logic handles rendering to maskCanvas
+            // We need to outline the non-transparent part of maskCanvas?
+
+            // Better: updateSelection already fills maskCanvas.
+            // We just need to visualize it nicely for Crop.
+        } else {
+            mainCtx.strokeStyle = '#000';
+            mainCtx.globalAlpha = 0.2;
+            mainCtx.fillStyle = '#00f';
+            mainCtx.drawImage(selectionManager.maskCanvas, 0, 0);
         }
 
         mainCtx.restore();
@@ -360,6 +415,10 @@ function renderCanvas() {
     if (painting && ['rect', 'circle', 'line'].includes(currentTool)) {
         drawShapePreview();
     }
+
+    mainCtx.restore(); // Restore context to default state (no transform)
+
+    updateHistogram(); // Update histogram after rendering
 }
 
 function drawCheckerboard(ctx, w, h) {
@@ -409,7 +468,9 @@ function renderLayerList() {
 mainCanvas.addEventListener('mousedown', startPosition);
 mainCanvas.addEventListener('mouseup', endPosition);
 mainCanvas.addEventListener('mousemove', draw);
-mainCanvas.addEventListener('click', handleCanvasClick); // For fill tool
+mainCanvas.addEventListener('click', handleCanvasClick);
+mainCanvas.addEventListener('wheel', handleWheel); // Zoom support
+mainCanvas.addEventListener('dblclick', handleDoubleClick); // Crop confirmation
 
 // Input Listeners
 document.getElementById('brush-size').addEventListener('input', (e) => {
@@ -424,50 +485,60 @@ document.getElementById('primary-color').addEventListener('input', (e) => {
     brushColor = e.target.value;
 });
 
+// --- Coordinate Helper ---
+function getCanvasCoordinates(e) {
+    const rect = mainCanvas.getBoundingClientRect();
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
+
+    // Inverse transform
+    const canvasX = (screenX - panX) / zoomLevel;
+    const canvasY = (screenY - panY) / zoomLevel;
+
+    return { x: canvasX, y: canvasY, screenX, screenY };
+}
+
+
 // --- Drawing Engine ---
 function startPosition(e) {
-    const rect = mainCanvas.getBoundingClientRect();
-    startX = e.clientX - rect.left;
-    startY = e.clientY - rect.top;
+    // Handle Pan Tool (Spacebar held or middle click)
+    if (isSpacePressed || e.button === 1) {
+        isPanning = true;
+        const coords = getCanvasCoordinates(e);
+        lastPanX = coords.screenX;
+        lastPanY = coords.screenY;
+        mainCanvas.style.cursor = 'grabbing';
+        return;
+    }
+
+    const coords = getCanvasCoordinates(e);
+    startX = coords.x;
+    startY = coords.y;
+
+    if (currentTool === 'move') {
+        const layer = layerManager.getActiveLayer();
+        if (layer) {
+            painting = true;
+            lastMoveX = coords.x;
+            lastMoveY = coords.y;
+        }
+        return;
+    }
 
     if (['fill', 'picker', 'text'].includes(currentTool)) return; // These are handled by click
 
     painting = true;
 
-    if (currentTool === 'marquee' || currentTool === 'lasso') {
+    if (currentTool === 'marquee' || currentTool === 'lasso' || currentTool === 'crop') {
         selectionManager.startSelection(startX, startY);
         return;
     }
-
-    // If we have a selection, and we are drawing, we need to clip the layer context?
-    // Doing real-time clipping on the canvas context is tricky for persistent strokes.
-    // Strategy: Draw to a temporary canvas, clip it with selection mask, then draw to layer.
-    // For this simple implementation: we will check collision in draw() or use clip()
 
     if (selectionManager.hasSelection && (currentTool === 'brush' || currentTool === 'eraser')) {
         const layer = layerManager.getActiveLayer();
         if(layer) {
             layer.ctx.save();
             layer.ctx.beginPath();
-            // Create a path from the mask? Complex.
-            // Alternative: Composite Mode "destination-in" with selection mask after stroke? No.
-
-            // Simple Rect Selection Support:
-            // if(currentTool === 'brush') layer.ctx.clip(selectionPath);
-
-            // For Pixel Mask Selection (Lasso):
-            // We'll use the maskCanvas as a clip pattern.
-            // Actually, correct way: draw stroke normally. Then immediately clear pixels outside selection.
-            // But that erases previous content.
-
-            // Correct way for Painter:
-            // 1. Set clip on layer context to the selection mask (using drawImage or clip())
-            // JS Canvas clip() takes a path. We have a raster mask.
-
-            // Workaround: We will just draw. In `draw`, we will use globalCompositeOperation carefully?
-            // No, easiest is:
-            // The `draw` function updates the layer.
-            // We should modify `draw` to only affect selected pixels.
         }
     }
 
@@ -477,38 +548,38 @@ function startPosition(e) {
 }
 
 function endPosition(e) {
+    if (isPanning) {
+        isPanning = false;
+        mainCanvas.style.cursor = isSpacePressed ? 'grab' : getCursorForTool(currentTool);
+        return;
+    }
+
     if (painting) {
-        const rect = mainCanvas.getBoundingClientRect();
-        const endX = e.clientX - rect.left;
-        const endY = e.clientY - rect.top;
+        const coords = getCanvasCoordinates(e);
+        const endX = coords.x;
+        const endY = coords.y;
 
         painting = false;
 
-        if (currentTool === 'marquee' || currentTool === 'lasso') {
+        if (currentTool === 'move') {
+            historyManager.saveState();
+            return;
+        }
+
+        if (currentTool === 'marquee' || currentTool === 'lasso' || currentTool === 'crop') {
             selectionManager.endSelection(endX, endY);
+            if (currentTool === 'crop') {
+                 // Don't crop immediately, wait for double click or enter?
+                 // For now, let user see the selection.
+                 // We will add a hint "Double click to Crop"
+            }
             return;
         }
 
         const layer = layerManager.getActiveLayer();
         if(layer) {
-
-            // If selection was active, we need to clean up the stroke that went outside?
-            // Or if we used clipping in draw(), restore context.
             if (selectionManager.hasSelection) {
-                 // For now, simple implementation doesn't strictly enforce selection clip on Brush
-                 // because raster-to-clip path is hard.
-                 // We will implement "Masking" after the stroke is done?
-                 // No, let's try to apply the mask now.
-
-                 // Apply Selection Mask to Layer (Keep only what's inside selection)
-                 // This is wrong, it would delete outside pixels of the whole layer.
-                 // We only want to delete the *new* pixels outside.
-                 // That requires a temporary scratch layer for every stroke.
-
-                 // Due to complexity, "Selection" in this version just visualizes the area
-                 // and restricts Filters/Fills, but maybe not Brush (unless we use scratch layer).
-
-                 // Let's make Selection strict for SHAPES and FILL at least.
+                 // Selection handling placeholder
             }
 
              // Commit shapes
@@ -533,15 +604,27 @@ function endPosition(e) {
             layer.ctx.beginPath();
         }
 
-        historyManager.saveState(); // Save state after stroke
-        renderCanvas(); // Update main display
+        historyManager.saveState();
+        renderCanvas();
     }
 }
 
 function draw(e) {
-    const rect = mainCanvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const coords = getCanvasCoordinates(e);
+    const x = coords.x;
+    const y = coords.y;
+
+    // Handle Panning
+    if (isPanning) {
+        const dx = coords.screenX - lastPanX;
+        const dy = coords.screenY - lastPanY;
+        panX += dx;
+        panY += dy;
+        lastPanX = coords.screenX;
+        lastPanY = coords.screenY;
+        renderCanvas();
+        return;
+    }
 
     // Update coordinates for preview
     window.lastMouseX = x;
@@ -552,8 +635,19 @@ function draw(e) {
     const layer = layerManager.getActiveLayer();
     if (!layer || !layer.visible) return;
 
+    if (currentTool === 'move') {
+        const dx = x - lastMoveX;
+        const dy = y - lastMoveY;
+        layer.x += dx;
+        layer.y += dy;
+        lastMoveX = x;
+        lastMoveY = y;
+        renderCanvas();
+        return;
+    }
+
     // Handle Selection Tools
-    if (currentTool === 'marquee' || currentTool === 'lasso') {
+    if (currentTool === 'marquee' || currentTool === 'lasso' || currentTool === 'crop') {
         selectionManager.updateSelection(x, y);
         return;
     }
@@ -563,10 +657,8 @@ function draw(e) {
         const ctx = layer.ctx;
         ctx.save();
 
-        // Quick Clip for Rectangular Selection (Optimization)
-        // If selection is complex lasso, this won't work easily without path reconstruction
-        // For now, Brush ignores selection in this simple implementation to avoid lag/bugs,
-        // unless we switch to a "Scratch Layer" approach for all drawing.
+        const localX = (x - layer.x);
+        const localY = (y - layer.y);
 
         ctx.lineWidth = brushSize;
         ctx.lineCap = 'round';
@@ -574,25 +666,28 @@ function draw(e) {
         ctx.globalCompositeOperation = 'source-over';
         ctx.strokeStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
 
-        ctx.lineTo(x, y);
+        ctx.lineTo(localX, localY);
         ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(x, y);
+        ctx.moveTo(localX, localY);
 
         ctx.restore();
         renderCanvas();
     } else if (currentTool === 'eraser') {
         const ctx = layer.ctx;
+        const localX = (x - layer.x);
+        const localY = (y - layer.y);
+
         ctx.lineWidth = brushSize;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.globalCompositeOperation = 'destination-out';
         ctx.strokeStyle = `rgba(0,0,0,1)`;
 
-        ctx.lineTo(x, y);
+        ctx.lineTo(localX, localY);
         ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(x, y);
+        ctx.moveTo(localX, localY);
         ctx.globalCompositeOperation = 'source-over';
         renderCanvas();
     } else {
@@ -608,8 +703,8 @@ function drawShapePreview() {
 
     ctx.save();
     ctx.strokeStyle = '#000';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([5, 5]); // Dashed line for preview
+    ctx.lineWidth = 1 / zoomLevel;
+    ctx.setLineDash([5 / zoomLevel, 5 / zoomLevel]);
 
     if (currentTool === 'rect') {
         ctx.strokeRect(startX, startY, x - startX, y - startY);
@@ -629,26 +724,31 @@ function drawShapePreview() {
 }
 
 function handleCanvasClick(e) {
-    const rect = mainCanvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    if (isPanning) return;
+
+    const coords = getCanvasCoordinates(e);
+    const x = coords.x;
+    const y = coords.y;
 
     const layer = layerManager.getActiveLayer();
     if (!layer || !layer.visible) return;
 
+    // Transform to local
+    const localX = x - layer.x;
+    const localY = y - layer.y;
+
     if (currentTool === 'fill') {
-        // Respect selection for fill
         if (selectionManager.hasSelection) {
-            // Check if click is inside selection
+            // Selection mask is global, so we use global x,y for mask check
             const maskPixel = selectionManager.ctx.getImageData(x, y, 1, 1).data;
-            if (maskPixel[3] === 0) return; // Clicked outside selection
+            if (maskPixel[3] === 0) return;
         }
 
-        floodFill(layer, Math.floor(x), Math.floor(y), hexToRgba(brushColor));
+        floodFill(layer, Math.floor(localX), Math.floor(localY), hexToRgba(brushColor));
         historyManager.saveState();
         renderCanvas();
     } else if (currentTool === 'picker') {
-        const pixel = layer.ctx.getImageData(x, y, 1, 1).data;
+        const pixel = layer.ctx.getImageData(localX, localY, 1, 1).data;
         const hex = rgbToHex(pixel[0], pixel[1], pixel[2]);
         brushColor = hex;
         document.getElementById('primary-color').value = hex;
@@ -657,11 +757,107 @@ function handleCanvasClick(e) {
         if (text) {
             layer.ctx.font = `${brushSize * 2}px Arial`;
             layer.ctx.fillStyle = brushColor;
-            layer.ctx.fillText(text, x, y);
+            layer.ctx.fillText(text, localX, localY);
             historyManager.saveState();
             renderCanvas();
         }
     }
+}
+
+function handleDoubleClick(e) {
+    if (currentTool === 'crop' && selectionManager.hasSelection) {
+        // Find crop bounds from mask
+        // Simple approach: using selectionManager startX, startY and current mouse (or last update)
+        // But the user might have dragged in any direction.
+        // We need the bounding box of the selection mask.
+        // Since crop tool uses rect selection logic, we can track the rect coords.
+
+        // Find bounds of non-transparent pixels in maskCanvas
+        const w = selectionManager.width;
+        const h = selectionManager.height;
+        const imgData = selectionManager.ctx.getImageData(0, 0, w, h);
+        const data = imgData.data;
+
+        let minX = w, minY = h, maxX = 0, maxY = 0;
+        let found = false;
+
+        for(let y=0; y<h; y++) {
+            for(let x=0; x<w; x++) {
+                if(data[(y*w+x)*4 + 3] > 0) {
+                    if(x < minX) minX = x;
+                    if(x > maxX) maxX = x;
+                    if(y < minY) minY = y;
+                    if(y > maxY) maxY = y;
+                    found = true;
+                }
+            }
+        }
+
+        if(found) {
+            performCrop(minX, minY, maxX - minX + 1, maxY - minY + 1);
+        }
+    }
+}
+
+function performCrop(x, y, w, h) {
+    if (w <= 0 || h <= 0) return;
+
+    // Resize main canvas
+    mainCanvas.width = w;
+    mainCanvas.height = h;
+    layerManager.width = w;
+    layerManager.height = h;
+    selectionManager.width = w;
+    selectionManager.height = h;
+
+    // Resize mask canvas
+    selectionManager.maskCanvas.width = w;
+    selectionManager.maskCanvas.height = h;
+
+    // Adjust Layers
+    layerManager.layers.forEach(layer => {
+        // Shift layer position
+        layer.x -= x;
+        layer.y -= y;
+
+        // Note: We don't necessarily need to crop the layer internal canvas,
+        // just moving it is enough to "crop" the view.
+        // But if we want to save memory or fully commit, we could crop them.
+        // For now, simple shift is sufficient and non-destructive to layer data (except for canvas bounds).
+    });
+
+    selectionManager.clearSelection();
+    historyManager.saveState();
+    renderCanvas();
+
+    // Reset view
+    panX = 0;
+    panY = 0;
+    zoomLevel = 1;
+}
+
+function handleWheel(e) {
+    e.preventDefault();
+    const zoomIntensity = 0.1;
+    const delta = e.deltaY < 0 ? 1 : -1;
+    const zoomFactor = Math.exp(delta * zoomIntensity);
+
+    const rect = mainCanvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const newZoom = zoomLevel * zoomFactor;
+
+    if (newZoom < 0.1 || newZoom > 10) return;
+
+    const worldX = (mouseX - panX) / zoomLevel;
+    const worldY = (mouseY - panY) / zoomLevel;
+
+    panX = mouseX - worldX * newZoom;
+    panY = mouseY - worldY * newZoom;
+    zoomLevel = newZoom;
+
+    renderCanvas();
 }
 
 
@@ -698,9 +894,18 @@ function floodFill(layer, startX, startY, fillColor) {
         if (x < 0 || x >= w || y < 0 || y >= h) continue;
 
         // Check selection mask
+        // Note: Mask is global. StartX/Y are local to layer.
+        // We need to check mask at (x + layer.x, y + layer.y)
         if (maskData) {
-            // If mask alpha is 0 (transparent), it's unselected. Skip.
-            if (maskData[pos + 3] === 0) continue;
+            const globalX = x + layer.x;
+            const globalY = y + layer.y;
+            // Check bounds of mask
+            if(globalX >= 0 && globalX < selectionManager.width && globalY >= 0 && globalY < selectionManager.height) {
+                 const maskPos = (globalY * selectionManager.width + globalX) * 4;
+                 if (maskData[maskPos + 3] === 0) continue;
+            } else {
+                continue; // Outside global mask area implies outside selection usually? Or unselected?
+            }
         }
 
         if (colorsMatch([data[pos], data[pos+1], data[pos+2], data[pos+3]], startColor)) {
@@ -729,18 +934,23 @@ function setTool(tool) {
 
     document.querySelectorAll('.tool').forEach(el => el.classList.remove('active'));
     const map = {
-        'brush': 0, 'eraser': 1, 'move': 2, 'fill': 3, 'picker': 4,
-        'rect': 5, 'circle': 6, 'line': 7, 'text': 8, 'marquee': 9, 'lasso': 10
+        'brush': 0, 'eraser': 1, 'move': 2, 'fill': 3, 'picker': 4, 'crop': 5,
+        'rect': 6, 'circle': 7, 'line': 8, 'text': 9, 'marquee': 10, 'lasso': 11
     };
     if (document.querySelectorAll('.tool')[map[tool]]) {
         document.querySelectorAll('.tool')[map[tool]].classList.add('active');
     }
 
-    if(tool === 'brush' || tool === 'eraser') mainCanvas.style.cursor = 'crosshair';
-    else if(tool === 'move') mainCanvas.style.cursor = 'move';
-    else if(tool === 'text') mainCanvas.style.cursor = 'text';
-    else if(tool === 'picker') mainCanvas.style.cursor = 'cell'; // closest to eyedropper
-    else mainCanvas.style.cursor = 'default';
+    mainCanvas.style.cursor = getCursorForTool(tool);
+}
+
+function getCursorForTool(tool) {
+    if(tool === 'brush' || tool === 'eraser') return 'crosshair';
+    else if(tool === 'move') return 'move';
+    else if(tool === 'text') return 'text';
+    else if(tool === 'picker') return 'cell';
+    else if(tool === 'crop') return 'crosshair';
+    return 'default';
 }
 
 // --- Color Helpers ---
@@ -766,9 +976,34 @@ function rgbToHex(r, g, b) {
 
 // --- File Operations ---
 function downloadImage() {
+    // We need to render the final image without zoom/pan for export
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = mainCanvas.width;
+    exportCanvas.height = mainCanvas.height;
+    const ctx = exportCanvas.getContext('2d');
+
+    // Replicate renderCanvas logic but flat
+    drawCheckerboard(ctx, exportCanvas.width, exportCanvas.height);
+    layerManager.layers.forEach(layer => {
+        if (!layer.visible) return;
+        ctx.save();
+        ctx.globalAlpha = layer.opacity;
+        ctx.globalCompositeOperation = layer.blendMode;
+
+        const centerX = (layer.x || 0) + layer.canvas.width / 2;
+        const centerY = (layer.y || 0) + layer.canvas.height / 2;
+        ctx.translate(centerX, centerY);
+        ctx.rotate(layer.rotation || 0);
+        ctx.scale(layer.scaleX || 1, layer.scaleY || 1);
+        ctx.translate(-centerX, -centerY);
+
+        ctx.drawImage(layer.canvas, layer.x || 0, layer.y || 0);
+        ctx.restore();
+    });
+
     const link = document.createElement('a');
     link.download = 'webphoto-export.jpg';
-    link.href = mainCanvas.toDataURL('image/jpeg', 0.8);
+    link.href = exportCanvas.toDataURL('image/jpeg', 0.8);
     link.click();
 }
 
@@ -821,7 +1056,7 @@ function applyImageAdjustment(type) {
         maskData = selectionManager.ctx.getImageData(0, 0, w, h).data;
     }
 
-    // Parameters
+    // Parameters & Convolution Filters
     let val;
     if (type === 'brightness') {
         const input = prompt("Enter Brightness (-100 to 100):", "0");
@@ -831,28 +1066,83 @@ function applyImageAdjustment(type) {
         const input = prompt("Enter Blur Radius (0-20):", "5");
         if (input === null) return;
         val = parseInt(input) || 0;
-
-        // Blur is complex to implement pixel-wise in pure JS efficiently.
-        // We will use a canvas filter trick for blur.
+        // Blur handled via canvas filter
         ctx.save();
-        if (selectionManager.hasSelection) {
-            selectionManager.clipContext(ctx);
-        }
+        if (selectionManager.hasSelection) selectionManager.clipContext(ctx);
         ctx.filter = `blur(${val}px)`;
-        ctx.drawImage(layer.canvas, 0, 0); // Draw itself with blur
+        ctx.drawImage(layer.canvas, 0, 0);
         ctx.filter = 'none';
         ctx.restore();
-
         historyManager.saveState();
         renderCanvas();
-        return; // Special case handled
+        return;
+    } else if (type === 'sharpen' || type === 'emboss') {
+        // Convolution Matrix
+        let kernel = [];
+        if (type === 'sharpen') {
+            kernel = [0, -1, 0, -1, 5, -1, 0, -1, 0];
+        } else if (type === 'emboss') {
+            kernel = [-2, -1, 0, -1, 1, 1, 0, 1, 2];
+        }
+        applyConvolution(ctx, w, h, kernel, maskData);
+        historyManager.saveState();
+        renderCanvas();
+        return;
+    } else if (type === 'pixelate') {
+        const input = prompt("Enter Block Size (2-100):", "10");
+        if (input === null) return;
+        val = parseInt(input) || 10;
+        if(val < 1) val = 1;
+
+        // Pixelate logic: Downscale by factor, then upscale
+        // But for selection support, we need to be careful.
+        // Easiest per-pixel approach:
+
+        const newImageData = ctx.createImageData(w, h);
+        const newData = newImageData.data;
+
+        for (let y = 0; y < h; y += val) {
+            for (let x = 0; x < w; x += val) {
+                // Get average or center pixel
+                const pIndex = (y * w + x) * 4;
+                const r = data[pIndex];
+                const g = data[pIndex + 1];
+                const b = data[pIndex + 2];
+                const a = data[pIndex + 3];
+
+                for (let py = 0; py < val; py++) {
+                    for (let px = 0; px < val; px++) {
+                         if (x + px >= w || y + py >= h) continue;
+                         const idx = ((y + py) * w + (x + px)) * 4;
+
+                         // Check selection
+                         if (maskData && maskData[idx+3] === 0) {
+                             newData[idx] = data[idx];
+                             newData[idx+1] = data[idx+1];
+                             newData[idx+2] = data[idx+2];
+                             newData[idx+3] = data[idx+3];
+                         } else {
+                             newData[idx] = r;
+                             newData[idx+1] = g;
+                             newData[idx+2] = b;
+                             newData[idx+3] = a;
+                         }
+                    }
+                }
+            }
+        }
+        ctx.putImageData(newImageData, 0, 0);
+        historyManager.saveState();
+        renderCanvas();
+        return;
+
     } else if (type === 'hue') {
         const input = prompt("Enter Hue Shift in Degrees (0-360):", "180");
         if (input === null) return;
         val = parseInt(input) || 0;
     }
 
-    // Process Pixels
+    // Process Pixels (Color Adjustments)
     for (let i = 0; i < data.length; i += 4) {
         // Skip unselected pixels
         if (maskData && maskData[i+3] === 0) continue;
@@ -890,6 +1180,138 @@ function applyImageAdjustment(type) {
     ctx.putImageData(imageData, 0, 0);
     historyManager.saveState();
     renderCanvas();
+}
+
+function applyConvolution(ctx, w, h, kernel, maskData) {
+    const side = Math.round(Math.sqrt(kernel.length));
+    const halfSide = Math.floor(side / 2);
+    const srcData = ctx.getImageData(0, 0, w, h);
+    const dstData = ctx.createImageData(w, h);
+    const src = srcData.data;
+    const dst = dstData.data;
+
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const dstOff = (y * w + x) * 4;
+
+            // If masked out, copy original
+            if (maskData && maskData[dstOff + 3] === 0) {
+                dst[dstOff] = src[dstOff];
+                dst[dstOff+1] = src[dstOff+1];
+                dst[dstOff+2] = src[dstOff+2];
+                dst[dstOff+3] = src[dstOff+3];
+                continue;
+            }
+
+            let r = 0, g = 0, b = 0;
+            for (let ky = 0; ky < side; ky++) {
+                for (let kx = 0; kx < side; kx++) {
+                    const scy = y + ky - halfSide;
+                    const scx = x + kx - halfSide;
+                    if (scy >= 0 && scy < h && scx >= 0 && scx < w) {
+                        const srcOff = (scy * w + scx) * 4;
+                        const wt = kernel[ky * side + kx];
+                        r += src[srcOff] * wt;
+                        g += src[srcOff + 1] * wt;
+                        b += src[srcOff + 2] * wt;
+                    }
+                }
+            }
+            dst[dstOff] = r;
+            dst[dstOff + 1] = g;
+            dst[dstOff + 2] = b;
+            dst[dstOff + 3] = src[dstOff + 3];
+        }
+    }
+    ctx.putImageData(dstData, 0, 0);
+}
+
+// --- Histogram ---
+function updateHistogram() {
+    const canvas = document.getElementById('histogram-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // Clear histogram
+    ctx.clearRect(0, 0, w, h);
+
+    // We want the histogram of the visible canvas.
+    // However, mainCanvas is huge and might be transformed.
+    // `renderCanvas` draws to `mainCtx`. But we might be mid-rendering.
+    // To get accurate histogram of what user sees (the composition):
+    // We need to access mainCtx pixel data.
+    // But mainCtx has zoom/pan applied. `getImageData` is affected by backing store size, not transforms directly on returned array?
+    // Actually getImageData gets pixels from the backing store.
+    // Since we cleared and redrew everything on mainCanvas, its pixels are current composition.
+
+    // Performance note: Reading 800x600 pixels every frame is heavy.
+    // We should throttle this or do it only on idle/changes.
+    // For this demo, we'll do it.
+
+    // But `mainCanvas` might be huge if cropped larger?
+    // And `getImageData` on hardware accel canvas can be slow.
+
+    try {
+        // Optimization: sample pixels? Or just do full.
+        const imgData = mainCtx.getImageData(0, 0, mainCanvas.width, mainCanvas.height);
+        const data = imgData.data;
+
+        const rCounts = new Array(256).fill(0);
+        const gCounts = new Array(256).fill(0);
+        const bCounts = new Array(256).fill(0);
+
+        let maxCount = 0;
+
+        for (let i = 0; i < data.length; i += 4) {
+            // Skip transparent pixels? Or count them? usually ignore alpha 0
+            if (data[i+3] === 0) continue;
+
+            rCounts[data[i]]++;
+            gCounts[data[i+1]]++;
+            bCounts[data[i+2]]++;
+        }
+
+        maxCount = Math.max(...rCounts, ...gCounts, ...bCounts);
+
+        if (maxCount === 0) return;
+
+        // Draw Histograms
+        ctx.globalCompositeOperation = 'screen';
+
+        // Draw Red
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+        drawChannel(ctx, w, h, rCounts, maxCount);
+
+        // Draw Green
+        ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
+        drawChannel(ctx, w, h, gCounts, maxCount);
+
+        // Draw Blue
+        ctx.fillStyle = 'rgba(0, 0, 255, 0.5)';
+        drawChannel(ctx, w, h, bCounts, maxCount);
+
+        ctx.globalCompositeOperation = 'source-over';
+
+    } catch (e) {
+        // CORS issues if image imported from other domain?
+        // Usually fine with file upload.
+        console.error("Histogram error", e);
+    }
+}
+
+function drawChannel(ctx, w, h, counts, max) {
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    for (let i = 0; i < 256; i++) {
+        const x = (i / 255) * w;
+        const y = h - (counts[i] / max) * h;
+        ctx.lineTo(x, y);
+    }
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fill();
 }
 
 // Helper: RGB <-> HSL
@@ -937,16 +1359,22 @@ function hslToRgb(h, s, l) {
 
 // --- Shortcuts ---
 window.addEventListener('keydown', (e) => {
+    if(e.code === 'Space') {
+        isSpacePressed = true;
+        mainCanvas.style.cursor = 'grab';
+    }
+
     if(e.key === 'b') setTool('brush');
     if(e.key === 'e') setTool('eraser');
     if(e.key === 'g') setTool('fill');
     if(e.key === 'i') setTool('picker');
+    if(e.key === 'c') setTool('crop');
     if(e.key === 'r') setTool('rect');
-    if(e.key === 'c') setTool('circle');
-    // if(e.key === 'l') setTool('line'); // Conflict with Lasso
+    // if(e.key === 'c') setTool('circle'); // Conflict with crop
+    if(e.key === 'l') setTool('lasso');
     if(e.key === 't') setTool('text');
     if(e.key === 'm') setTool('marquee');
-    if(e.key === 'l') setTool('lasso'); // L for Lasso now
+    if(e.key === 'v') setTool('move');
     if(e.key === 'Escape') selectionManager.clearSelection();
     if(e.key === '[' && brushSize > 1) { brushSize--; document.getElementById('brush-size').value = brushSize; }
     if(e.key === ']') { brushSize++; document.getElementById('brush-size').value = brushSize; }
@@ -966,6 +1394,14 @@ window.addEventListener('keydown', (e) => {
     }
 });
 
+window.addEventListener('keyup', (e) => {
+    if(e.code === 'Space') {
+        isSpacePressed = false;
+        mainCanvas.style.cursor = getCursorForTool(currentTool);
+        isPanning = false; // Stop panning if space released during drag
+    }
+});
+
 // --- Menu Logic ---
 function toggleMenu(menuId) {
     // Close other menus first
@@ -977,6 +1413,36 @@ function toggleMenu(menuId) {
     }
     document.getElementById(menuId).classList.toggle("show");
 }
+
+function zoomIn() {
+    zoomLevel *= 1.2;
+    // Adjust pan to zoom towards center? Simple zoom center
+    const cx = mainCanvas.width / 2;
+    const cy = mainCanvas.height / 2;
+    // panX = cx - (cx - panX) * 1.2;
+    // panY = cy - (cy - panY) * 1.2;
+    // Keeping it simple center zoom for menu click
+    panX = panX * 1.2 - cx * 0.2;
+    panY = panY * 1.2 - cy * 0.2;
+    renderCanvas();
+}
+
+function zoomOut() {
+    zoomLevel /= 1.2;
+    const cx = mainCanvas.width / 2;
+    const cy = mainCanvas.height / 2;
+    panX = panX / 1.2 + cx * (1 - 1/1.2);
+    panY = panY / 1.2 + cy * (1 - 1/1.2);
+    renderCanvas();
+}
+
+function fitScreen() {
+    zoomLevel = 1;
+    panX = 0;
+    panY = 0;
+    renderCanvas();
+}
+
 
 // Close menus when clicking elsewhere
 window.onclick = function(event) {
