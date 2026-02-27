@@ -83,7 +83,7 @@ body {
 
 /* Toolbar (Left) */
 #toolbar {
-    width: 50px;
+    width: 40px;
     background-color: var(--bg-panel);
     border-right: 1px solid var(--border);
     display: flex;
@@ -92,15 +92,15 @@ body {
     padding-top: 5px;
 }
 .tool {
-    width: 40px;
-    height: 40px;
+    width: 32px;
+    height: 32px;
     display: flex;
     justify-content: center;
     align-items: center;
     cursor: pointer;
     margin-bottom: 2px;
     border-radius: 3px;
-    font-size: 18px;
+    font-size: 16px;
     color: #b0b0b0;
 }
 .tool:hover { background-color: var(--bg-tool); }
@@ -136,7 +136,7 @@ body {
 
 /* Panels (Right) */
 #panels {
-    width: 260px;
+    width: 200px;
     background-color: var(--bg-panel);
     border-left: 1px solid var(--border);
     display: flex;
@@ -275,13 +275,13 @@ button:hover { background-color: #5a5a5a; }
             <div class="tool" title="Clear Selection (Esc)" onclick="selectionManager.clearSelection()">✖</div>
             <div style="flex:1"></div>
 
-            <div id="color-history" style="display:flex; flex-wrap:wrap; width:40px; justify-content:center; gap:2px; margin-bottom:5px;">
+            <div id="color-history" style="display:flex; flex-wrap:wrap; width:32px; justify-content:center; gap:2px; margin-bottom:5px;">
                 <!-- History colors injected here -->
             </div>
 
             <div style="display:flex; flex-direction:column; align-items:center; gap:2px; margin-bottom:5px;">
-                <input type="color" id="primary-color" value="#000000" title="Primary Color" style="width:25px; height:25px;">
-                <input type="color" id="secondary-color" value="#ffffff" title="Secondary Color" style="width:25px; height:25px;">
+                <input type="color" id="primary-color" value="#000000" title="Primary Color" style="width:20px; height:20px;">
+                <input type="color" id="secondary-color" value="#ffffff" title="Secondary Color" style="width:20px; height:20px;">
             </div>
         </div>
 
@@ -824,6 +824,22 @@ let cloneSourceY = null;
 
 // --- Initialization ---
 function init() {
+    // Maximize Canvas Logic
+    // We want the canvas to fill the available space in #canvas-area on load
+    const canvasArea = document.getElementById('canvas-area');
+    const w = canvasArea.clientWidth;
+    const h = canvasArea.clientHeight;
+
+    // Update main canvas and manager dimensions
+    mainCanvas.width = w;
+    mainCanvas.height = h;
+    layerManager.width = w;
+    layerManager.height = h;
+    selectionManager.width = w;
+    selectionManager.height = h;
+    selectionManager.maskCanvas.width = w;
+    selectionManager.maskCanvas.height = h;
+
     // Create background layer
     const bg = layerManager.addLayer('Background');
     bg.ctx.fillStyle = '#ffffff';
@@ -834,6 +850,19 @@ function init() {
 
     renderLayerList();
     renderCanvas();
+
+    // Handle Window Resize (optional but good for UX)
+    window.addEventListener('resize', handleResize);
+}
+
+function handleResize() {
+    // Note: Standard image editors do NOT resize the image document on window resize.
+    // They usually just center/zoom the view.
+    // However, the user asked to "maximize use of screen".
+    // For this prototype, we won't destructively resize the active document on window resize,
+    // as that would crop/distort user work.
+    // We will just let the CSS handle the view container size.
+    // The "maximize" happened on init.
 }
 
 function renderCanvas() {
