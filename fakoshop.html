@@ -942,6 +942,43 @@ mainCanvas.addEventListener('click', handleCanvasClick);
 mainCanvas.addEventListener('wheel', handleWheel); // Zoom support
 mainCanvas.addEventListener('dblclick', handleDoubleClick); // Crop confirmation
 
+// Touch Support
+mainCanvas.addEventListener('touchstart', (e) => {
+    e.preventDefault(); // Prevent scrolling
+    const touch = e.touches[0];
+    const mouseEvent = new MouseEvent('mousedown', {
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        button: 0
+    });
+    startPosition(mouseEvent);
+}, { passive: false });
+
+mainCanvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    const mouseEvent = new MouseEvent('mousemove', {
+        clientX: touch.clientX,
+        clientY: touch.clientY
+    });
+    draw(mouseEvent);
+}, { passive: false });
+
+mainCanvas.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    // Touchend doesn't have coordinates in touches list if it was the last finger.
+    // However, endPosition usually doesn't strictly rely on exact last coordinates
+    // for simple brush strokes (it relies on `painting = false`).
+    // But for shape tools we used `getCanvasCoordinates(e)`.
+    // We can rely on changedTouches.
+    const touch = e.changedTouches[0];
+    const mouseEvent = new MouseEvent('mouseup', {
+        clientX: touch.clientX,
+        clientY: touch.clientY
+    });
+    endPosition(mouseEvent);
+}, { passive: false });
+
 // Input Listeners
 document.getElementById('brush-size').addEventListener('input', (e) => {
     brushSize = e.target.value;
