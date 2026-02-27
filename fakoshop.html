@@ -227,6 +227,8 @@ button:hover { background-color: #5a5a5a; }
                 <div onclick="applyImageAdjustment('sharpen')">Sharpen</div>
                 <div onclick="applyImageAdjustment('emboss')">Emboss</div>
                 <div onclick="applyImageAdjustment('pixelate')">Pixelate...</div>
+                <div onclick="applyImageAdjustment('noise')">Add Noise...</div>
+                <div onclick="applyImageAdjustment('vignette')">Vignette...</div>
                 <hr>
                 <div onclick="applyImageAdjustment('grayscale')">Grayscale</div>
                 <div onclick="applyImageAdjustment('sepia')">Sepia</div>
@@ -269,8 +271,14 @@ button:hover { background-color: #5a5a5a; }
             <div class="tool" title="Text (T)" onclick="setTool('text')">TXT</div>
             <div class="tool" title="Marquee Select (M)" onclick="setTool('marquee')">⚃</div>
             <div class="tool" title="Lasso Select (L)" onclick="setTool('lasso')">➰</div>
+            <div class="tool" title="Polygon Lasso (P)" onclick="setTool('poly-lasso')">📐</div>
             <div class="tool" title="Clear Selection (Esc)" onclick="selectionManager.clearSelection()">✖</div>
             <div style="flex:1"></div>
+
+            <div id="color-history" style="display:flex; flex-wrap:wrap; width:40px; justify-content:center; gap:2px; margin-bottom:5px;">
+                <!-- History colors injected here -->
+            </div>
+
             <div style="display:flex; flex-direction:column; align-items:center; gap:2px; margin-bottom:5px;">
                 <input type="color" id="primary-color" value="#000000" title="Primary Color" style="width:25px; height:25px;">
                 <input type="color" id="secondary-color" value="#ffffff" title="Secondary Color" style="width:25px; height:25px;">
@@ -304,6 +312,24 @@ button:hover { background-color: #5a5a5a; }
                 <div id="shape-options" style="display: none; margin-left: 10px; align-items: center; gap: 10px;">
                      <label><input type="checkbox" id="shape-fill" checked> Fill</label>
                      <label><input type="checkbox" id="shape-stroke"> Stroke</label>
+                </div>
+
+                <div id="text-options" style="display: none; margin-left: 10px; align-items: center; gap: 5px;">
+                    <select id="font-family" style="padding: 2px;">
+                        <option value="Arial">Arial</option>
+                        <option value="Verdana">Verdana</option>
+                        <option value="Times New Roman">Times New Roman</option>
+                        <option value="Courier New">Courier New</option>
+                        <option value="Georgia">Georgia</option>
+                        <option value="Comic Sans MS">Comic Sans MS</option>
+                    </select>
+                    <label><input type="checkbox" id="font-bold"> B</label>
+                    <label><input type="checkbox" id="font-italic"> I</label>
+                </div>
+
+                <div id="wand-options" style="display: none; margin-left: 10px; align-items: center; gap: 5px;">
+                    <span>Tol:</span>
+                    <input type="number" id="wand-tolerance" value="30" min="0" max="255" style="width: 50px;">
                 </div>
 
                 <span style="margin-left: auto;">Smoothing: 10%</span>
@@ -775,6 +801,12 @@ let brushType = 'round'; // round, square, calligraphy
 let isAirbrush = false;
 let shapeFill = true;
 let shapeStroke = false;
+let fontFamily = 'Arial';
+let fontBold = false;
+let fontItalic = false;
+let wandTolerance = 30;
+let polygonPoints = []; // For Polygon Lasso
+let colorHistory = [];
 let startX, startY; // For shape tools
 
 // Zoom & Pan Variables
@@ -888,6 +920,39 @@ function renderCanvas() {
         drawShapePreview();
     }
 
+    // Draw Polygon Lasso Preview
+    if (currentTool === 'poly-lasso' && polygonPoints.length > 0) {
+        mainCtx.save();
+        mainCtx.lineWidth = 1 / zoomLevel;
+        mainCtx.strokeStyle = '#000';
+        mainCtx.setLineDash([5 / zoomLevel, 5 / zoomLevel]);
+        mainCtx.beginPath();
+        mainCtx.moveTo(polygonPoints[0][0], polygonPoints[0][1]);
+        for(let i=1; i<polygonPoints.length; i++) {
+            mainCtx.lineTo(polygonPoints[i][0], polygonPoints[i][1]);
+        }
+        // Line to current mouse
+        if (window.lastMouseX !== undefined) {
+             // Need to transform window.lastMouseX (global canvas coords) to view
+             // renderCanvas already has transforms applied!
+             // So we draw using global coords directly.
+             mainCtx.lineTo(window.lastMouseX, window.lastMouseY);
+        }
+        mainCtx.stroke();
+
+        // Draw points
+        mainCtx.fillStyle = '#fff';
+        mainCtx.strokeStyle = '#000';
+        mainCtx.setLineDash([]);
+        const ptSize = 4 / zoomLevel;
+        polygonPoints.forEach(p => {
+            mainCtx.fillRect(p[0] - ptSize/2, p[1] - ptSize/2, ptSize, ptSize);
+            mainCtx.strokeRect(p[0] - ptSize/2, p[1] - ptSize/2, ptSize, ptSize);
+        });
+
+        mainCtx.restore();
+    }
+
     // Draw Clone Source preview
     if (currentTool === 'clone' && cloneSourceX !== null) {
         mainCtx.save();
@@ -979,6 +1044,10 @@ document.getElementById('brush-opacity').addEventListener('input', (e) => {
 document.getElementById('primary-color').addEventListener('input', (e) => {
     brushColor = e.target.value;
 });
+document.getElementById('primary-color').addEventListener('change', (e) => {
+    // Add to history on commit (mouse up)
+    addToColorHistory(e.target.value);
+});
 document.getElementById('secondary-color').addEventListener('input', (e) => {
     secondaryColor = e.target.value;
 });
@@ -1003,6 +1072,19 @@ document.getElementById('shape-fill').addEventListener('change', (e) => {
 
 document.getElementById('shape-stroke').addEventListener('change', (e) => {
     shapeStroke = e.target.checked;
+});
+
+document.getElementById('font-family').addEventListener('change', (e) => {
+    fontFamily = e.target.value;
+});
+document.getElementById('font-bold').addEventListener('change', (e) => {
+    fontBold = e.target.checked;
+});
+document.getElementById('font-italic').addEventListener('change', (e) => {
+    fontItalic = e.target.checked;
+});
+document.getElementById('wand-tolerance').addEventListener('change', (e) => {
+    wandTolerance = parseInt(e.target.value) || 30;
 });
 
 // --- Coordinate Helper ---
@@ -1058,7 +1140,7 @@ function startPosition(e) {
         return;
     }
 
-    if (['fill', 'picker', 'text', 'wand'].includes(currentTool)) return; // These are handled by click
+    if (['fill', 'picker', 'text', 'wand', 'poly-lasso'].includes(currentTool)) return; // These are handled by click (poly-lasso needs special click handling)
 
     // Refresh Clone Source Snapshot
     if (currentTool === 'clone' && !e.altKey) {
@@ -1108,6 +1190,12 @@ function startPosition(e) {
     // Reset last position for brush interpolation
     window.lastX = startX - (layerManager.getActiveLayer()?.x || 0);
     window.lastY = startY - (layerManager.getActiveLayer()?.y || 0);
+
+    // Handle Polygon Lasso - Preview line
+    if (currentTool === 'poly-lasso' && polygonPoints.length > 0) {
+        // Just force render to show the preview line from last point to mouse
+        renderCanvas();
+    }
 
     if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone') {
         if (isAirbrush && currentTool === 'brush') {
@@ -1622,26 +1710,61 @@ function handleCanvasClick(e) {
         renderCanvas();
     } else if (currentTool === 'wand') {
         // Magic Wand Logic
-        const tolerance = 30; // Hardcoded tolerance for now
-        magicWandSelection(layer, Math.floor(localX), Math.floor(localY), tolerance);
+        magicWandSelection(layer, Math.floor(localX), Math.floor(localY), wandTolerance);
     } else if (currentTool === 'picker') {
         const pixel = layer.ctx.getImageData(localX, localY, 1, 1).data;
         const hex = rgbToHex(pixel[0], pixel[1], pixel[2]);
         brushColor = hex;
         document.getElementById('primary-color').value = hex;
+        addToColorHistory(hex);
     } else if (currentTool === 'text') {
         const text = prompt("Enter text:", "Text Layer");
         if (text) {
-            layer.ctx.font = `${brushSize * 2}px Arial`;
+            // Construct Font String
+            let fontStr = "";
+            if (fontItalic) fontStr += "italic ";
+            if (fontBold) fontStr += "bold ";
+            fontStr += `${brushSize * 2}px ${fontFamily}`;
+
+            layer.ctx.font = fontStr;
             layer.ctx.fillStyle = brushColor;
             layer.ctx.fillText(text, localX, localY);
             historyManager.saveState();
             renderCanvas();
         }
+    } else if (currentTool === 'poly-lasso') {
+        // Add point
+        // Store global coords since selection mask is global
+        polygonPoints.push([x, y]);
+        renderCanvas();
     }
 }
 
 function handleDoubleClick(e) {
+    if (currentTool === 'poly-lasso') {
+        // Close polygon selection
+        if (polygonPoints.length < 3) {
+            polygonPoints = [];
+            renderCanvas();
+            return;
+        }
+
+        selectionManager.clearSelection();
+        selectionManager.hasSelection = true;
+        selectionManager.ctx.beginPath();
+        selectionManager.ctx.moveTo(polygonPoints[0][0], polygonPoints[0][1]);
+        for (let i = 1; i < polygonPoints.length; i++) {
+            selectionManager.ctx.lineTo(polygonPoints[i][0], polygonPoints[i][1]);
+        }
+        selectionManager.ctx.closePath();
+        selectionManager.ctx.fillStyle = 'rgba(0,0,0,1)';
+        selectionManager.ctx.fill();
+
+        polygonPoints = []; // Reset points
+        renderCanvas();
+        return;
+    }
+
     if (currentTool === 'crop' && selectionManager.hasSelection) {
         // Find crop bounds from mask
         // Simple approach: using selectionManager startX, startY and current mouse (or last update)
@@ -1882,7 +2005,7 @@ function setTool(tool) {
     document.querySelectorAll('.tool').forEach(el => el.classList.remove('active'));
     const map = {
         'brush': 0, 'eraser': 1, 'clone': 2, 'move': 3, 'fill': 4, 'gradient': 5, 'wand': 6, 'picker': 7, 'crop': 8,
-        'rect': 9, 'circle': 10, 'line': 11, 'text': 12, 'marquee': 13, 'lasso': 14
+        'rect': 9, 'circle': 10, 'line': 11, 'text': 12, 'marquee': 13, 'lasso': 14, 'poly-lasso': 15
     };
     if (document.querySelectorAll('.tool')[map[tool]]) {
         document.querySelectorAll('.tool')[map[tool]].classList.add('active');
@@ -1890,11 +2013,15 @@ function setTool(tool) {
 
     mainCanvas.style.cursor = getCursorForTool(tool);
 
-    // Toggle Shape Options
-    if(['rect', 'circle'].includes(tool)) {
-        document.getElementById('shape-options').style.display = 'flex';
-    } else {
-        document.getElementById('shape-options').style.display = 'none';
+    // Toggle Options
+    document.getElementById('shape-options').style.display = ['rect', 'circle'].includes(tool) ? 'flex' : 'none';
+    document.getElementById('text-options').style.display = tool === 'text' ? 'flex' : 'none';
+    document.getElementById('wand-options').style.display = tool === 'wand' ? 'flex' : 'none';
+
+    // Reset Polygon Lasso state if switching away
+    if (tool !== 'poly-lasso') {
+        polygonPoints = [];
+        renderCanvas(); // Redraw to clear preview
     }
 }
 
@@ -1906,6 +2033,30 @@ function getCursorForTool(tool) {
     else if(tool === 'crop') return 'crosshair';
     else if(tool === 'wand' || tool === 'gradient') return 'crosshair';
     return 'default';
+}
+
+function addToColorHistory(color) {
+    if (colorHistory.includes(color)) return;
+    colorHistory.unshift(color);
+    if (colorHistory.length > 8) colorHistory.pop();
+
+    const container = document.getElementById('color-history');
+    container.innerHTML = '';
+
+    colorHistory.forEach(c => {
+        const div = document.createElement('div');
+        div.style.width = '15px';
+        div.style.height = '15px';
+        div.style.backgroundColor = c;
+        div.style.cursor = 'pointer';
+        div.style.border = '1px solid #555';
+        div.title = c;
+        div.onclick = () => {
+            brushColor = c;
+            document.getElementById('primary-color').value = c;
+        };
+        container.appendChild(div);
+    });
 }
 
 // --- Color Helpers ---
@@ -2187,6 +2338,14 @@ function applyImageAdjustment(type) {
         const input = prompt("Enter Hue Shift in Degrees (0-360):", "180");
         if (input === null) return;
         val = parseInt(input) || 0;
+    } else if (type === 'noise') {
+        const input = prompt("Enter Noise Amount (0-100):", "20");
+        if (input === null) return;
+        val = parseInt(input) || 20;
+    } else if (type === 'vignette') {
+        const input = prompt("Enter Vignette Strength (0-100):", "50");
+        if (input === null) return;
+        val = parseInt(input) || 50;
     }
 
     // Process Pixels (Color Adjustments)
@@ -2221,6 +2380,23 @@ function applyImageAdjustment(type) {
             const newH = (h + val / 360) % 1;
             const [r, g, b] = hslToRgb(newH, s, l);
             data[i] = r; data[i+1] = g; data[i+2] = b;
+        } else if (type === 'noise') {
+            const rand = (Math.random() - 0.5) * val * 2;
+            data[i] = Math.min(255, Math.max(0, data[i] + rand));
+            data[i+1] = Math.min(255, Math.max(0, data[i+1] + rand));
+            data[i+2] = Math.min(255, Math.max(0, data[i+2] + rand));
+        } else if (type === 'vignette') {
+            const x = (i / 4) % w;
+            const y = Math.floor((i / 4) / w);
+            const cx = w / 2;
+            const cy = h / 2;
+            const maxDist = Math.sqrt(cx*cx + cy*cy);
+            const dist = Math.sqrt((x-cx)*(x-cx) + (y-cy)*(y-cy));
+            const factor = 1 - (dist / maxDist) * (val / 100);
+
+            data[i] *= factor;
+            data[i+1] *= factor;
+            data[i+2] *= factor;
         }
     }
 
