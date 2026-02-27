@@ -9,13 +9,56 @@
 <body>
 
     <div id="menubar">
-        <div class="menu-item" onclick="newFile()">File</div>
-        <div class="menu-item" onclick="alert('Undo/Redo not implemented in Lite version')">Edit</div>
-        <div class="menu-item" onclick="alert('Image adjustments are in the right panel')">Image</div>
-        <div class="menu-item">Filter</div>
-        <div class="menu-item">View</div>
-        <div class="menu-item">Window</div>
-        <div class="menu-item">Help</div>
+        <div class="menu-item" onclick="toggleMenu('file-menu')">File
+            <div id="file-menu" class="dropdown-content">
+                <div onclick="newFile()">New</div>
+                <div onclick="document.getElementById('file-upload').click()">Open...</div>
+                <hr>
+                <div onclick="downloadImage()">Export as JPG</div>
+                <div onclick="downloadImage()">Export as PNG</div>
+            </div>
+        </div>
+        <div class="menu-item" onclick="toggleMenu('edit-menu')">Edit
+            <div id="edit-menu" class="dropdown-content">
+                <div onclick="historyManager.undo()">Undo (Ctrl+Z)</div>
+                <div onclick="historyManager.redo()">Redo (Ctrl+Y)</div>
+                <hr>
+                <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Cut</div>
+                <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Copy</div>
+                <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Paste</div>
+            </div>
+        </div>
+        <div class="menu-item" onclick="toggleMenu('image-menu')">Image
+            <div id="image-menu" class="dropdown-content">
+                <div onclick="applyImageAdjustment('brightness')">Brightness/Contrast...</div>
+                <div onclick="applyImageAdjustment('hue')">Hue/Saturation...</div>
+                <div onclick="applyImageAdjustment('invert')">Invert</div>
+            </div>
+        </div>
+        <div class="menu-item" onclick="toggleMenu('filter-menu')">Filter
+            <div id="filter-menu" class="dropdown-content">
+                <div onclick="applyImageAdjustment('blur')">Gaussian Blur...</div>
+                <div onclick="applyImageAdjustment('grayscale')">Grayscale</div>
+                <div onclick="applyImageAdjustment('sepia')">Sepia</div>
+            </div>
+        </div>
+        <div class="menu-item" onclick="toggleMenu('view-menu')">View
+            <div id="view-menu" class="dropdown-content">
+                <div onclick="alert('Zoom not implemented yet')">Zoom In</div>
+                <div onclick="alert('Zoom not implemented yet')">Zoom Out</div>
+                <div onclick="alert('Zoom not implemented yet')">Fit Screen</div>
+            </div>
+        </div>
+        <div class="menu-item" onclick="toggleMenu('window-menu')">Window
+            <div id="window-menu" class="dropdown-content">
+                <div onclick="document.getElementById('panels').classList.toggle('hidden')">Toggle Panels</div>
+            </div>
+        </div>
+        <div class="menu-item" onclick="toggleMenu('help-menu')">Help
+            <div id="help-menu" class="dropdown-content">
+                <div onclick="alert('WebPhoto Pro v1.0\nSimulated Photoshop Clone')">About</div>
+            </div>
+        </div>
     </div>
 
     <div id="workspace">
@@ -62,16 +105,12 @@
                 [Histogram Placeholder]
             </div>
 
-            <div class="panel-header">Adjustments (Destructive)</div>
+            <div class="panel-header">Quick Actions</div>
             <div class="panel-content">
-                <button onclick="applyImageAdjustment('brightness')">Brightness/Contrast...</button>
-                <button onclick="applyImageAdjustment('hue')">Hue/Saturation...</button>
-                <button onclick="applyImageAdjustment('blur')">Gaussian Blur...</button>
-                <button onclick="applyImageAdjustment('invert')">Invert Colors</button>
-                <button onclick="applyImageAdjustment('grayscale')">Grayscale</button>
-                <button onclick="applyImageAdjustment('sepia')">Sepia</button>
+                <button onclick="applyImageAdjustment('brightness')">Brightness/Contrast</button>
+                <button onclick="applyImageAdjustment('hue')">Hue/Saturation</button>
+                <button onclick="applyImageAdjustment('invert')">Invert</button>
                 <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
-                <button onclick="downloadImage()">Export as JPG</button>
                 <input type="file" id="file-upload" style="display: none;" onchange="handleFileUpload(this)">
                 <button onclick="document.getElementById('file-upload').click()">Open Image</button>
             </div>

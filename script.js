@@ -959,5 +959,30 @@ window.addEventListener('keydown', (e) => {
     }
 });
 
+// --- Menu Logic ---
+function toggleMenu(menuId) {
+    // Close other menus first
+    const dropdowns = document.getElementsByClassName("dropdown-content");
+    for (let i = 0; i < dropdowns.length; i++) {
+        if (dropdowns[i].id !== menuId) {
+            dropdowns[i].classList.remove('show');
+        }
+    }
+    document.getElementById(menuId).classList.toggle("show");
+}
+
+// Close menus when clicking elsewhere
+window.onclick = function(event) {
+    if (!event.target.matches('.menu-item') && !event.target.matches('.menu-item *')) {
+        const dropdowns = document.getElementsByClassName("dropdown-content");
+        for (let i = 0; i < dropdowns.length; i++) {
+            const openDropdown = dropdowns[i];
+            if (openDropdown.classList.contains('show')) {
+                openDropdown.classList.remove('show');
+            }
+        }
+    }
+}
+
 // Initialize app
 init();
