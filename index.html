@@ -12,16 +12,20 @@
         <div class="menu-item" onclick="toggleMenu('file-menu')">File
             <div id="file-menu" class="dropdown-content">
                 <div onclick="newFile()">New</div>
-                <div onclick="document.getElementById('file-upload').click()">Open...</div>
+                <div onclick="document.getElementById('file-upload').click()">Open Image...</div>
+                <div onclick="document.getElementById('project-upload').click()">Open Project...</div>
                 <hr>
+                <div onclick="saveProject()">Save Project</div>
                 <div onclick="downloadImage()">Export as JPG</div>
-                <div onclick="downloadImage()">Export as PNG</div>
             </div>
         </div>
         <div class="menu-item" onclick="toggleMenu('edit-menu')">Edit
             <div id="edit-menu" class="dropdown-content">
                 <div onclick="historyManager.undo()">Undo (Ctrl+Z)</div>
                 <div onclick="historyManager.redo()">Redo (Ctrl+Y)</div>
+                <hr>
+                <div onclick="transformLayer('scale')">Scale Layer...</div>
+                <div onclick="transformLayer('rotate')">Rotate Layer...</div>
                 <hr>
                 <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Cut</div>
                 <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Copy</div>
@@ -38,15 +42,19 @@
         <div class="menu-item" onclick="toggleMenu('filter-menu')">Filter
             <div id="filter-menu" class="dropdown-content">
                 <div onclick="applyImageAdjustment('blur')">Gaussian Blur...</div>
+                <div onclick="applyImageAdjustment('sharpen')">Sharpen</div>
+                <div onclick="applyImageAdjustment('emboss')">Emboss</div>
+                <div onclick="applyImageAdjustment('pixelate')">Pixelate...</div>
+                <hr>
                 <div onclick="applyImageAdjustment('grayscale')">Grayscale</div>
                 <div onclick="applyImageAdjustment('sepia')">Sepia</div>
             </div>
         </div>
         <div class="menu-item" onclick="toggleMenu('view-menu')">View
             <div id="view-menu" class="dropdown-content">
-                <div onclick="alert('Zoom not implemented yet')">Zoom In</div>
-                <div onclick="alert('Zoom not implemented yet')">Zoom Out</div>
-                <div onclick="alert('Zoom not implemented yet')">Fit Screen</div>
+                <div onclick="zoomIn()">Zoom In</div>
+                <div onclick="zoomOut()">Zoom Out</div>
+                <div onclick="fitScreen()">Fit Screen</div>
             </div>
         </div>
         <div class="menu-item" onclick="toggleMenu('window-menu')">Window
@@ -66,9 +74,13 @@
         <div id="toolbar">
             <div class="tool active" title="Brush Tool (B)" onclick="setTool('brush')">🖌️</div>
             <div class="tool" title="Eraser Tool (E)" onclick="setTool('eraser')">🧼</div>
+            <div class="tool" title="Clone Stamp (S)" onclick="setTool('clone')">©</div>
             <div class="tool" title="Move Tool (V)" onclick="setTool('move')">✥</div>
             <div class="tool" title="Fill Bucket (G)" onclick="setTool('fill')">🪣</div>
+            <div class="tool" title="Gradient (Shift+G)" onclick="setTool('gradient')">🌈</div>
+            <div class="tool" title="Magic Wand (W)" onclick="setTool('wand')">🪄</div>
             <div class="tool" title="Eyedropper (I)" onclick="setTool('picker')">🖊️</div>
+            <div class="tool" title="Crop Tool (C)" onclick="setTool('crop')">✂️</div>
             <div class="tool" title="Rectangle (R)" onclick="setTool('rect')">⬜</div>
             <div class="tool" title="Circle (C)" onclick="setTool('circle')">⭕</div>
             <div class="tool" title="Line (L)" onclick="setTool('line')">📏</div>
@@ -77,7 +89,10 @@
             <div class="tool" title="Lasso Select (L)" onclick="setTool('lasso')">➰</div>
             <div class="tool" title="Clear Selection (Esc)" onclick="selectionManager.clearSelection()">✖</div>
             <div style="flex:1"></div>
-            <input type="color" id="primary-color" value="#000000" title="Primary Color">
+            <div style="display:flex; flex-direction:column; align-items:center; gap:2px; margin-bottom:5px;">
+                <input type="color" id="primary-color" value="#000000" title="Primary Color" style="width:25px; height:25px;">
+                <input type="color" id="secondary-color" value="#ffffff" title="Secondary Color" style="width:25px; height:25px;">
+            </div>
         </div>
 
         <div style="flex: 1; display: flex; flex-direction: column;">
@@ -101,8 +116,8 @@
         <div id="panels">
 
             <div class="panel-header">Navigator & Info</div>
-            <div class="panel-content" style="height: 150px; display:flex; justify-content:center; align-items:center; color:#555;">
-                [Histogram Placeholder]
+            <div class="panel-content" style="height: 150px; display:flex; justify-content:center; align-items:center; color:#555; padding: 0;">
+                <canvas id="histogram-canvas" width="260" height="150" style="width: 100%; height: 100%; background: #222;"></canvas>
             </div>
 
             <div class="panel-header">Quick Actions</div>
@@ -112,6 +127,7 @@
                 <button onclick="applyImageAdjustment('invert')">Invert</button>
                 <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
                 <input type="file" id="file-upload" style="display: none;" onchange="handleFileUpload(this)">
+                <input type="file" id="project-upload" style="display: none;" accept=".json" onchange="loadProject(this)">
                 <button onclick="document.getElementById('file-upload').click()">Open Image</button>
             </div>
 
@@ -140,10 +156,12 @@
                 <!-- Layer items populated by JS -->
             </div>
             <div class="panel-header" style="border-top:none; display:flex; justify-content:flex-end;">
-                <span style="cursor:pointer; padding:0 10px;" title="New Layer" onclick="layerManager.addLayer()">📄 +</span>
-                <span style="cursor:pointer; padding:0 10px;" title="Delete Layer" onclick="layerManager.deleteActiveLayer()">🗑️</span>
-                <span style="cursor:pointer; padding:0 10px;" title="Move Up" onclick="layerManager.moveLayer(1)">⬆️</span>
-                <span style="cursor:pointer; padding:0 10px;" title="Move Down" onclick="layerManager.moveLayer(-1)">⬇️</span>
+                <span style="cursor:pointer; padding:0 5px;" title="New Layer" onclick="layerManager.addLayer()">📄 +</span>
+                <span style="cursor:pointer; padding:0 5px;" title="Duplicate Layer" onclick="layerManager.duplicateActiveLayer()">📄 ²</span>
+                <span style="cursor:pointer; padding:0 5px;" title="Merge Down" onclick="layerManager.mergeDown()">⏬</span>
+                <span style="cursor:pointer; padding:0 5px;" title="Delete Layer" onclick="layerManager.deleteActiveLayer()">🗑️</span>
+                <span style="cursor:pointer; padding:0 5px;" title="Move Up" onclick="layerManager.moveLayer(1)">⬆️</span>
+                <span style="cursor:pointer; padding:0 5px;" title="Move Down" onclick="layerManager.moveLayer(-1)">⬇️</span>
             </div>
 
         </div>
