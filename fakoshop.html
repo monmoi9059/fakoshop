@@ -83,7 +83,7 @@ body {
 
 /* Toolbar (Left) */
 #toolbar {
-    width: 50px;
+    width: 40px;
     background-color: var(--bg-panel);
     border-right: 1px solid var(--border);
     display: flex;
@@ -92,15 +92,15 @@ body {
     padding-top: 5px;
 }
 .tool {
-    width: 40px;
-    height: 40px;
+    width: 32px;
+    height: 32px;
     display: flex;
     justify-content: center;
     align-items: center;
     cursor: pointer;
     margin-bottom: 2px;
     border-radius: 3px;
-    font-size: 18px;
+    font-size: 16px;
     color: #b0b0b0;
 }
 .tool:hover { background-color: var(--bg-tool); }
@@ -136,7 +136,7 @@ body {
 
 /* Panels (Right) */
 #panels {
-    width: 260px;
+    width: 200px;
     background-color: var(--bg-panel);
     border-left: 1px solid var(--border);
     display: flex;
@@ -227,6 +227,8 @@ button:hover { background-color: #5a5a5a; }
                 <div onclick="applyImageAdjustment('sharpen')">Sharpen</div>
                 <div onclick="applyImageAdjustment('emboss')">Emboss</div>
                 <div onclick="applyImageAdjustment('pixelate')">Pixelate...</div>
+                <div onclick="applyImageAdjustment('noise')">Add Noise...</div>
+                <div onclick="applyImageAdjustment('vignette')">Vignette...</div>
                 <hr>
                 <div onclick="applyImageAdjustment('grayscale')">Grayscale</div>
                 <div onclick="applyImageAdjustment('sepia')">Sepia</div>
@@ -269,11 +271,17 @@ button:hover { background-color: #5a5a5a; }
             <div class="tool" title="Text (T)" onclick="setTool('text')">TXT</div>
             <div class="tool" title="Marquee Select (M)" onclick="setTool('marquee')">⚃</div>
             <div class="tool" title="Lasso Select (L)" onclick="setTool('lasso')">➰</div>
+            <div class="tool" title="Polygon Lasso (P)" onclick="setTool('poly-lasso')">📐</div>
             <div class="tool" title="Clear Selection (Esc)" onclick="selectionManager.clearSelection()">✖</div>
             <div style="flex:1"></div>
+
+            <div id="color-history" style="display:flex; flex-wrap:wrap; width:32px; justify-content:center; gap:2px; margin-bottom:5px;">
+                <!-- History colors injected here -->
+            </div>
+
             <div style="display:flex; flex-direction:column; align-items:center; gap:2px; margin-bottom:5px;">
-                <input type="color" id="primary-color" value="#000000" title="Primary Color" style="width:25px; height:25px;">
-                <input type="color" id="secondary-color" value="#ffffff" title="Secondary Color" style="width:25px; height:25px;">
+                <input type="color" id="primary-color" value="#000000" title="Primary Color" style="width:20px; height:20px;">
+                <input type="color" id="secondary-color" value="#ffffff" title="Secondary Color" style="width:20px; height:20px;">
             </div>
         </div>
 
@@ -286,6 +294,43 @@ button:hover { background-color: #5a5a5a; }
                 <span style="margin-left: 10px;">Opacity:</span>
                 <input type="range" id="brush-opacity" min="1" max="100" value="100" style="width: 100px;">
                 <span id="brush-opacity-val">100%</span>
+
+                <span style="margin-left: 10px;">Hardness:</span>
+                <input type="range" id="brush-hardness" min="0" max="100" value="100" style="width: 100px;">
+                <span id="brush-hardness-val">100%</span>
+
+                <select id="brush-type" style="margin-left: 10px; padding: 2px;">
+                    <option value="round">Round</option>
+                    <option value="square">Square</option>
+                    <option value="calligraphy">Calligraphy</option>
+                </select>
+
+                <label style="margin-left: 10px; display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" id="airbrush-toggle"> Airbrush
+                </label>
+
+                <div id="shape-options" style="display: none; margin-left: 10px; align-items: center; gap: 10px;">
+                     <label><input type="checkbox" id="shape-fill" checked> Fill</label>
+                     <label><input type="checkbox" id="shape-stroke"> Stroke</label>
+                </div>
+
+                <div id="text-options" style="display: none; margin-left: 10px; align-items: center; gap: 5px;">
+                    <select id="font-family" style="padding: 2px;">
+                        <option value="Arial">Arial</option>
+                        <option value="Verdana">Verdana</option>
+                        <option value="Times New Roman">Times New Roman</option>
+                        <option value="Courier New">Courier New</option>
+                        <option value="Georgia">Georgia</option>
+                        <option value="Comic Sans MS">Comic Sans MS</option>
+                    </select>
+                    <label><input type="checkbox" id="font-bold"> B</label>
+                    <label><input type="checkbox" id="font-italic"> I</label>
+                </div>
+
+                <div id="wand-options" style="display: none; margin-left: 10px; align-items: center; gap: 5px;">
+                    <span>Tol:</span>
+                    <input type="number" id="wand-tolerance" value="30" min="0" max="255" style="width: 50px;">
+                </div>
 
                 <span style="margin-left: auto;">Smoothing: 10%</span>
             </div>
@@ -745,11 +790,23 @@ const historyManager = new HistoryManager();
 const selectionManager = new SelectionManager(mainCanvas.width, mainCanvas.height);
 
 let painting = false;
+let airbrushInterval = null;
 let currentTool = 'brush';
 let brushSize = 10;
 let brushColor = '#000000';
 let secondaryColor = '#ffffff';
 let brushOpacity = 1;
+let brushHardness = 100;
+let brushType = 'round'; // round, square, calligraphy
+let isAirbrush = false;
+let shapeFill = true;
+let shapeStroke = false;
+let fontFamily = 'Arial';
+let fontBold = false;
+let fontItalic = false;
+let wandTolerance = 30;
+let polygonPoints = []; // For Polygon Lasso
+let colorHistory = [];
 let startX, startY; // For shape tools
 
 // Zoom & Pan Variables
@@ -767,6 +824,22 @@ let cloneSourceY = null;
 
 // --- Initialization ---
 function init() {
+    // Maximize Canvas Logic
+    // We want the canvas to fill the available space in #canvas-area on load
+    const canvasArea = document.getElementById('canvas-area');
+    const w = canvasArea.clientWidth;
+    const h = canvasArea.clientHeight;
+
+    // Update main canvas and manager dimensions
+    mainCanvas.width = w;
+    mainCanvas.height = h;
+    layerManager.width = w;
+    layerManager.height = h;
+    selectionManager.width = w;
+    selectionManager.height = h;
+    selectionManager.maskCanvas.width = w;
+    selectionManager.maskCanvas.height = h;
+
     // Create background layer
     const bg = layerManager.addLayer('Background');
     bg.ctx.fillStyle = '#ffffff';
@@ -777,6 +850,19 @@ function init() {
 
     renderLayerList();
     renderCanvas();
+
+    // Handle Window Resize (optional but good for UX)
+    window.addEventListener('resize', handleResize);
+}
+
+function handleResize() {
+    // Note: Standard image editors do NOT resize the image document on window resize.
+    // They usually just center/zoom the view.
+    // However, the user asked to "maximize use of screen".
+    // For this prototype, we won't destructively resize the active document on window resize,
+    // as that would crop/distort user work.
+    // We will just let the CSS handle the view container size.
+    // The "maximize" happened on init.
 }
 
 function renderCanvas() {
@@ -861,6 +947,39 @@ function renderCanvas() {
     // Draw Preview for shapes (if painting)
     if (painting && ['rect', 'circle', 'line', 'gradient'].includes(currentTool)) {
         drawShapePreview();
+    }
+
+    // Draw Polygon Lasso Preview
+    if (currentTool === 'poly-lasso' && polygonPoints.length > 0) {
+        mainCtx.save();
+        mainCtx.lineWidth = 1 / zoomLevel;
+        mainCtx.strokeStyle = '#000';
+        mainCtx.setLineDash([5 / zoomLevel, 5 / zoomLevel]);
+        mainCtx.beginPath();
+        mainCtx.moveTo(polygonPoints[0][0], polygonPoints[0][1]);
+        for(let i=1; i<polygonPoints.length; i++) {
+            mainCtx.lineTo(polygonPoints[i][0], polygonPoints[i][1]);
+        }
+        // Line to current mouse
+        if (window.lastMouseX !== undefined) {
+             // Need to transform window.lastMouseX (global canvas coords) to view
+             // renderCanvas already has transforms applied!
+             // So we draw using global coords directly.
+             mainCtx.lineTo(window.lastMouseX, window.lastMouseY);
+        }
+        mainCtx.stroke();
+
+        // Draw points
+        mainCtx.fillStyle = '#fff';
+        mainCtx.strokeStyle = '#000';
+        mainCtx.setLineDash([]);
+        const ptSize = 4 / zoomLevel;
+        polygonPoints.forEach(p => {
+            mainCtx.fillRect(p[0] - ptSize/2, p[1] - ptSize/2, ptSize, ptSize);
+            mainCtx.strokeRect(p[0] - ptSize/2, p[1] - ptSize/2, ptSize, ptSize);
+        });
+
+        mainCtx.restore();
     }
 
     // Draw Clone Source preview
@@ -954,8 +1073,47 @@ document.getElementById('brush-opacity').addEventListener('input', (e) => {
 document.getElementById('primary-color').addEventListener('input', (e) => {
     brushColor = e.target.value;
 });
+document.getElementById('primary-color').addEventListener('change', (e) => {
+    // Add to history on commit (mouse up)
+    addToColorHistory(e.target.value);
+});
 document.getElementById('secondary-color').addEventListener('input', (e) => {
     secondaryColor = e.target.value;
+});
+
+// New UI Listeners
+document.getElementById('brush-hardness').addEventListener('input', (e) => {
+    brushHardness = parseInt(e.target.value);
+    document.getElementById('brush-hardness-val').innerText = brushHardness + '%';
+});
+
+document.getElementById('brush-type').addEventListener('change', (e) => {
+    brushType = e.target.value;
+});
+
+document.getElementById('airbrush-toggle').addEventListener('change', (e) => {
+    isAirbrush = e.target.checked;
+});
+
+document.getElementById('shape-fill').addEventListener('change', (e) => {
+    shapeFill = e.target.checked;
+});
+
+document.getElementById('shape-stroke').addEventListener('change', (e) => {
+    shapeStroke = e.target.checked;
+});
+
+document.getElementById('font-family').addEventListener('change', (e) => {
+    fontFamily = e.target.value;
+});
+document.getElementById('font-bold').addEventListener('change', (e) => {
+    fontBold = e.target.checked;
+});
+document.getElementById('font-italic').addEventListener('change', (e) => {
+    fontItalic = e.target.checked;
+});
+document.getElementById('wand-tolerance').addEventListener('change', (e) => {
+    wandTolerance = parseInt(e.target.value) || 30;
 });
 
 // --- Coordinate Helper ---
@@ -988,6 +1146,10 @@ function startPosition(e) {
     startX = coords.x;
     startY = coords.y;
 
+    // Store globally for Airbrush
+    window.lastMouseX = coords.x;
+    window.lastMouseY = coords.y;
+
     if (currentTool === 'move') {
         const layer = layerManager.getActiveLayer();
         if (layer) {
@@ -1007,7 +1169,7 @@ function startPosition(e) {
         return;
     }
 
-    if (['fill', 'picker', 'text', 'wand'].includes(currentTool)) return; // These are handled by click
+    if (['fill', 'picker', 'text', 'wand', 'poly-lasso'].includes(currentTool)) return; // These are handled by click (poly-lasso needs special click handling)
 
     // Refresh Clone Source Snapshot
     if (currentTool === 'clone' && !e.altKey) {
@@ -1054,12 +1216,34 @@ function startPosition(e) {
         }
     }
 
+    // Reset last position for brush interpolation
+    window.lastX = startX - (layerManager.getActiveLayer()?.x || 0);
+    window.lastY = startY - (layerManager.getActiveLayer()?.y || 0);
+
+    // Handle Polygon Lasso - Preview line
+    if (currentTool === 'poly-lasso' && polygonPoints.length > 0) {
+        // Just force render to show the preview line from last point to mouse
+        renderCanvas();
+    }
+
     if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone') {
-        draw(e);
+        if (isAirbrush && currentTool === 'brush') {
+            // Start Airbrush
+            clearInterval(airbrushInterval);
+            airbrushInterval = setInterval(() => {
+                if (painting) {
+                    drawAirbrush();
+                }
+            }, 50); // 20 times a second
+            drawAirbrush(); // Draw immediately too
+        } else {
+            draw(e);
+        }
     }
 }
 
 function endPosition(e) {
+    clearInterval(airbrushInterval);
     if (isPanning) {
         isPanning = false;
         mainCanvas.style.cursor = isSpacePressed ? 'grab' : getCursorForTool(currentTool);
@@ -1096,14 +1280,28 @@ function endPosition(e) {
 
              // Commit shapes
             if (currentTool === 'rect') {
-                layer.ctx.fillStyle = brushColor;
-                layer.ctx.fillRect(startX, startY, endX - startX, endY - startY);
+                if (shapeFill) {
+                    layer.ctx.fillStyle = brushColor;
+                    layer.ctx.fillRect(startX, startY, endX - startX, endY - startY);
+                }
+                if (shapeStroke) {
+                    layer.ctx.strokeStyle = brushColor;
+                    layer.ctx.lineWidth = brushSize;
+                    layer.ctx.strokeRect(startX, startY, endX - startX, endY - startY);
+                }
             } else if (currentTool === 'circle') {
                 const radius = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
-                layer.ctx.fillStyle = brushColor;
                 layer.ctx.beginPath();
                 layer.ctx.arc(startX, startY, radius, 0, Math.PI * 2);
-                layer.ctx.fill();
+                if (shapeFill) {
+                    layer.ctx.fillStyle = brushColor;
+                    layer.ctx.fill();
+                }
+                if (shapeStroke) {
+                    layer.ctx.strokeStyle = brushColor;
+                    layer.ctx.lineWidth = brushSize;
+                    layer.ctx.stroke();
+                }
             } else if (currentTool === 'line') {
                 layer.ctx.strokeStyle = brushColor;
                 layer.ctx.lineWidth = brushSize;
@@ -1169,6 +1367,54 @@ function endPosition(e) {
     }
 }
 
+function drawAirbrush() {
+    if (!painting) return;
+    const layer = layerManager.getActiveLayer();
+    if (!layer || !layer.visible) return;
+
+    // Use last known coordinates (window.lastMouseX/Y are global canvas coords, need local)
+    // Actually getCanvasCoordinates converts screen to global canvas space.
+    // We need to store global canvas space for airbrush to persist at spot.
+
+    // We can rely on window.lastMouseX/Y from draw() updates, but if mouse isn't moving, draw() isn't called.
+    // So we need `draw(e)` to update position even if airbrush.
+
+    const x = window.lastMouseX;
+    const y = window.lastMouseY;
+
+    if (x === undefined || y === undefined) return;
+
+    const ctx = layer.ctx;
+    ctx.save();
+
+    const localX = (x - layer.x);
+    const localY = (y - layer.y);
+
+    // Airbrush Effect: Random spray or soft accumulation?
+    // Usually soft accumulation for "Airbrush" in Photoshop (Flow).
+    // Or spray for Paint. Let's do Soft Accumulation (Flow).
+
+    const colorRgb = hexToRgb(brushColor);
+    const rad = brushSize / 2;
+
+    // Low opacity accumulation
+    // We use a radial gradient to stamp
+    const flow = 0.1; // 10% per tick
+
+    const grad = ctx.createRadialGradient(localX, localY, 0, localX, localY, rad);
+    grad.addColorStop(0, `rgba(${colorRgb}, ${flow * brushOpacity})`);
+    grad.addColorStop(1, `rgba(${colorRgb}, 0)`);
+
+    ctx.fillStyle = grad;
+    ctx.globalCompositeOperation = 'source-over'; // Accumulate
+    ctx.beginPath();
+    ctx.arc(localX, localY, rad, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+    renderCanvas();
+}
+
 function draw(e) {
     const coords = getCanvasCoordinates(e);
     const x = coords.x;
@@ -1213,7 +1459,16 @@ function draw(e) {
     }
 
     // Handle Brush/Eraser/Clone (Real-time)
-    if (currentTool === 'brush' || currentTool === 'clone') {
+    if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone') {
+
+        // If Airbrush is on, we just update coordinates for the interval loop and return
+        if (isAirbrush && currentTool === 'brush') {
+             // Update global tracking vars for the interval loop
+             window.lastMouseX = x;
+             window.lastMouseY = y;
+             return;
+        }
+
         const ctx = layer.ctx;
         ctx.save();
 
@@ -1320,37 +1575,98 @@ function draw(e) {
             // No stroke, we manually painted.
 
         } else {
-            // Normal Brush
-            ctx.lineWidth = brushSize;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.strokeStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
+            // Advanced Brush Logic
+            const isEraser = currentTool === 'eraser';
+            ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
+            const colorRgb = hexToRgb(brushColor); // For eraser this is ignored by destination-out usually, or we use black
 
-            ctx.lineTo(localX, localY);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(localX, localY);
+            if (brushType === 'square') {
+                // Square Brush (Axis Aligned)
+                ctx.fillStyle = `rgba(${colorRgb}, ${brushOpacity})`;
+
+                // Interpolation loop
+                const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
+                const steps = Math.ceil(dist); // 1 pixel step
+
+                for (let i = 0; i <= steps; i++) {
+                    const t = steps === 0 ? 0 : i / steps;
+                    const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
+                    const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
+
+                    // Draw centered square
+                    ctx.fillRect(cx - brushSize/2, cy - brushSize/2, brushSize, brushSize);
+                }
+
+            } else if (brushType === 'calligraphy') {
+                // Calligraphy Brush (Oval)
+                // Fixed angle oval.
+                // We must draw multiple ovals along the path.
+                const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
+                const angle = Math.atan2(localY - (window.lastY || localY), localX - (window.lastX || localX));
+
+                const steps = Math.ceil(dist); // 1 step per pixel
+
+                ctx.fillStyle = `rgba(${colorRgb}, ${brushOpacity})`;
+
+                for (let i = 0; i < steps; i++) {
+                    const t = i / steps;
+                    const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
+                    const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
+
+                    ctx.save();
+                    ctx.translate(cx, cy);
+                    ctx.rotate(-45 * Math.PI / 180); // Fixed 45 degree angle
+                    ctx.scale(1, 0.2); // Flatten to create calligraphy effect
+                    ctx.beginPath();
+                    ctx.arc(0, 0, brushSize / 2, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+
+            } else {
+                // Round Brush with Hardness
+                // If hardness is 100, use standard stroke.
+                // If hardness < 100, we need soft edges. Canvas API stroke doesn't support radial gradient brushes easily.
+                // We must use 'shadowBlur' or draw circles with gradients.
+
+                if (brushHardness >= 95) {
+                    ctx.lineWidth = brushSize;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.strokeStyle = `rgba(${colorRgb}, ${brushOpacity})`;
+                    ctx.lineTo(localX, localY);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(localX, localY);
+                } else {
+                    // Soft Brush (drawing repeated circles with gradient)
+                    const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
+                    const steps = Math.ceil(dist / (brushSize * 0.1)); // Optimization: step size based on brush size
+
+                    for (let i = 0; i <= steps; i++) {
+                        const t = i / Math.max(steps, 1);
+                        const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
+                        const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
+
+                        const rad = brushSize / 2;
+                        const grad = ctx.createRadialGradient(cx, cy, rad * (brushHardness/100), cx, cy, rad);
+                        grad.addColorStop(0, `rgba(${colorRgb}, ${brushOpacity})`);
+                        grad.addColorStop(1, `rgba(${colorRgb}, 0)`);
+
+                        ctx.fillStyle = grad;
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+
+            // Store last position specifically for brush interpolation
+            window.lastX = localX;
+            window.lastY = localY;
         }
 
         ctx.restore();
-        renderCanvas();
-    } else if (currentTool === 'eraser') {
-        const ctx = layer.ctx;
-        const localX = (x - layer.x);
-        const localY = (y - layer.y);
-
-        ctx.lineWidth = brushSize;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.globalCompositeOperation = 'destination-out';
-        ctx.strokeStyle = `rgba(0,0,0,1)`;
-
-        ctx.lineTo(localX, localY);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(localX, localY);
-        ctx.globalCompositeOperation = 'source-over';
         renderCanvas();
     } else {
         // For shapes, we just re-render to show the preview
@@ -1423,26 +1739,61 @@ function handleCanvasClick(e) {
         renderCanvas();
     } else if (currentTool === 'wand') {
         // Magic Wand Logic
-        const tolerance = 30; // Hardcoded tolerance for now
-        magicWandSelection(layer, Math.floor(localX), Math.floor(localY), tolerance);
+        magicWandSelection(layer, Math.floor(localX), Math.floor(localY), wandTolerance);
     } else if (currentTool === 'picker') {
         const pixel = layer.ctx.getImageData(localX, localY, 1, 1).data;
         const hex = rgbToHex(pixel[0], pixel[1], pixel[2]);
         brushColor = hex;
         document.getElementById('primary-color').value = hex;
+        addToColorHistory(hex);
     } else if (currentTool === 'text') {
         const text = prompt("Enter text:", "Text Layer");
         if (text) {
-            layer.ctx.font = `${brushSize * 2}px Arial`;
+            // Construct Font String
+            let fontStr = "";
+            if (fontItalic) fontStr += "italic ";
+            if (fontBold) fontStr += "bold ";
+            fontStr += `${brushSize * 2}px ${fontFamily}`;
+
+            layer.ctx.font = fontStr;
             layer.ctx.fillStyle = brushColor;
             layer.ctx.fillText(text, localX, localY);
             historyManager.saveState();
             renderCanvas();
         }
+    } else if (currentTool === 'poly-lasso') {
+        // Add point
+        // Store global coords since selection mask is global
+        polygonPoints.push([x, y]);
+        renderCanvas();
     }
 }
 
 function handleDoubleClick(e) {
+    if (currentTool === 'poly-lasso') {
+        // Close polygon selection
+        if (polygonPoints.length < 3) {
+            polygonPoints = [];
+            renderCanvas();
+            return;
+        }
+
+        selectionManager.clearSelection();
+        selectionManager.hasSelection = true;
+        selectionManager.ctx.beginPath();
+        selectionManager.ctx.moveTo(polygonPoints[0][0], polygonPoints[0][1]);
+        for (let i = 1; i < polygonPoints.length; i++) {
+            selectionManager.ctx.lineTo(polygonPoints[i][0], polygonPoints[i][1]);
+        }
+        selectionManager.ctx.closePath();
+        selectionManager.ctx.fillStyle = 'rgba(0,0,0,1)';
+        selectionManager.ctx.fill();
+
+        polygonPoints = []; // Reset points
+        renderCanvas();
+        return;
+    }
+
     if (currentTool === 'crop' && selectionManager.hasSelection) {
         // Find crop bounds from mask
         // Simple approach: using selectionManager startX, startY and current mouse (or last update)
@@ -1683,13 +2034,24 @@ function setTool(tool) {
     document.querySelectorAll('.tool').forEach(el => el.classList.remove('active'));
     const map = {
         'brush': 0, 'eraser': 1, 'clone': 2, 'move': 3, 'fill': 4, 'gradient': 5, 'wand': 6, 'picker': 7, 'crop': 8,
-        'rect': 9, 'circle': 10, 'line': 11, 'text': 12, 'marquee': 13, 'lasso': 14
+        'rect': 9, 'circle': 10, 'line': 11, 'text': 12, 'marquee': 13, 'lasso': 14, 'poly-lasso': 15
     };
     if (document.querySelectorAll('.tool')[map[tool]]) {
         document.querySelectorAll('.tool')[map[tool]].classList.add('active');
     }
 
     mainCanvas.style.cursor = getCursorForTool(tool);
+
+    // Toggle Options
+    document.getElementById('shape-options').style.display = ['rect', 'circle'].includes(tool) ? 'flex' : 'none';
+    document.getElementById('text-options').style.display = tool === 'text' ? 'flex' : 'none';
+    document.getElementById('wand-options').style.display = tool === 'wand' ? 'flex' : 'none';
+
+    // Reset Polygon Lasso state if switching away
+    if (tool !== 'poly-lasso') {
+        polygonPoints = [];
+        renderCanvas(); // Redraw to clear preview
+    }
 }
 
 function getCursorForTool(tool) {
@@ -1700,6 +2062,30 @@ function getCursorForTool(tool) {
     else if(tool === 'crop') return 'crosshair';
     else if(tool === 'wand' || tool === 'gradient') return 'crosshair';
     return 'default';
+}
+
+function addToColorHistory(color) {
+    if (colorHistory.includes(color)) return;
+    colorHistory.unshift(color);
+    if (colorHistory.length > 8) colorHistory.pop();
+
+    const container = document.getElementById('color-history');
+    container.innerHTML = '';
+
+    colorHistory.forEach(c => {
+        const div = document.createElement('div');
+        div.style.width = '15px';
+        div.style.height = '15px';
+        div.style.backgroundColor = c;
+        div.style.cursor = 'pointer';
+        div.style.border = '1px solid #555';
+        div.title = c;
+        div.onclick = () => {
+            brushColor = c;
+            document.getElementById('primary-color').value = c;
+        };
+        container.appendChild(div);
+    });
 }
 
 // --- Color Helpers ---
@@ -1981,6 +2367,14 @@ function applyImageAdjustment(type) {
         const input = prompt("Enter Hue Shift in Degrees (0-360):", "180");
         if (input === null) return;
         val = parseInt(input) || 0;
+    } else if (type === 'noise') {
+        const input = prompt("Enter Noise Amount (0-100):", "20");
+        if (input === null) return;
+        val = parseInt(input) || 20;
+    } else if (type === 'vignette') {
+        const input = prompt("Enter Vignette Strength (0-100):", "50");
+        if (input === null) return;
+        val = parseInt(input) || 50;
     }
 
     // Process Pixels (Color Adjustments)
@@ -2015,6 +2409,23 @@ function applyImageAdjustment(type) {
             const newH = (h + val / 360) % 1;
             const [r, g, b] = hslToRgb(newH, s, l);
             data[i] = r; data[i+1] = g; data[i+2] = b;
+        } else if (type === 'noise') {
+            const rand = (Math.random() - 0.5) * val * 2;
+            data[i] = Math.min(255, Math.max(0, data[i] + rand));
+            data[i+1] = Math.min(255, Math.max(0, data[i+1] + rand));
+            data[i+2] = Math.min(255, Math.max(0, data[i+2] + rand));
+        } else if (type === 'vignette') {
+            const x = (i / 4) % w;
+            const y = Math.floor((i / 4) / w);
+            const cx = w / 2;
+            const cy = h / 2;
+            const maxDist = Math.sqrt(cx*cx + cy*cy);
+            const dist = Math.sqrt((x-cx)*(x-cx) + (y-cy)*(y-cy));
+            const factor = 1 - (dist / maxDist) * (val / 100);
+
+            data[i] *= factor;
+            data[i+1] *= factor;
+            data[i+2] *= factor;
         }
     }
 
