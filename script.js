@@ -108,6 +108,96 @@ class LayerManager {
             renderCanvas();
         }
     }
+
+    duplicateActiveLayer() {
+        const layer = this.getActiveLayer();
+        if (!layer) return;
+
+        const newLayer = this.addLayer(layer.name + " Copy");
+        // Copy properties
+        newLayer.x = layer.x;
+        newLayer.y = layer.y;
+        newLayer.scaleX = layer.scaleX;
+        newLayer.scaleY = layer.scaleY;
+        newLayer.rotation = layer.rotation;
+        newLayer.opacity = layer.opacity;
+        newLayer.blendMode = layer.blendMode;
+
+        // Copy content
+        newLayer.ctx.drawImage(layer.canvas, 0, 0);
+
+        renderCanvas();
+        historyManager.saveState();
+    }
+
+    mergeDown() {
+        const index = this.layers.findIndex(l => l.id === this.activeLayerId);
+        if (index <= 0) {
+            alert("No layer below to merge into.");
+            return;
+        }
+
+        const topLayer = this.layers[index];
+        const bottomLayer = this.layers[index - 1];
+
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = this.width;
+        tempCanvas.height = this.height;
+        const ctx = tempCanvas.getContext('2d');
+
+        // Draw Bottom
+        if(bottomLayer.visible) {
+            ctx.save();
+            ctx.globalAlpha = bottomLayer.opacity;
+            // No blend mode for bottom, it's the base of the merge
+
+            const cx1 = (bottomLayer.x || 0) + bottomLayer.canvas.width / 2;
+            const cy1 = (bottomLayer.y || 0) + bottomLayer.canvas.height / 2;
+            ctx.translate(cx1, cy1);
+            ctx.rotate(bottomLayer.rotation || 0);
+            ctx.scale(bottomLayer.scaleX || 1, bottomLayer.scaleY || 1);
+            ctx.translate(-cx1, -cy1);
+            ctx.drawImage(bottomLayer.canvas, bottomLayer.x || 0, bottomLayer.y || 0);
+            ctx.restore();
+        }
+
+        // Draw Top
+        if(topLayer.visible) {
+            ctx.save();
+            ctx.globalAlpha = topLayer.opacity;
+            ctx.globalCompositeOperation = topLayer.blendMode;
+
+            const cx2 = (topLayer.x || 0) + topLayer.canvas.width / 2;
+            const cy2 = (topLayer.y || 0) + topLayer.canvas.height / 2;
+            ctx.translate(cx2, cy2);
+            ctx.rotate(topLayer.rotation || 0);
+            ctx.scale(topLayer.scaleX || 1, topLayer.scaleY || 1);
+            ctx.translate(-cx2, -cy2);
+            ctx.drawImage(topLayer.canvas, topLayer.x || 0, topLayer.y || 0);
+            ctx.restore();
+        }
+
+        // Update Bottom Layer
+        bottomLayer.ctx.clearRect(0,0, bottomLayer.canvas.width, bottomLayer.canvas.height);
+        bottomLayer.ctx.drawImage(tempCanvas, 0, 0); // Copy merged result
+
+        // Reset Bottom Layer Properties (it is now a rasterized composition)
+        bottomLayer.x = 0;
+        bottomLayer.y = 0;
+        bottomLayer.rotation = 0;
+        bottomLayer.scaleX = 1;
+        bottomLayer.scaleY = 1;
+        bottomLayer.opacity = 1;
+        bottomLayer.blendMode = 'source-over';
+
+        // Remove Top Layer
+        this.layers.splice(index, 1);
+        this.activeLayerId = bottomLayer.id;
+
+        renderLayerList();
+        renderCanvas();
+        historyManager.saveState();
+    }
 }
 
 // --- History System ---
@@ -306,6 +396,7 @@ let painting = false;
 let currentTool = 'brush';
 let brushSize = 10;
 let brushColor = '#000000';
+let secondaryColor = '#ffffff';
 let brushOpacity = 1;
 let startX, startY; // For shape tools
 
@@ -317,6 +408,10 @@ let isPanning = false;
 let isSpacePressed = false;
 let lastPanX, lastPanY;
 let lastMoveX, lastMoveY; // For move tool
+
+// Clone Stamp
+let cloneSourceX = null;
+let cloneSourceY = null;
 
 // --- Initialization ---
 function init() {
@@ -412,8 +507,31 @@ function renderCanvas() {
     }
 
     // Draw Preview for shapes (if painting)
-    if (painting && ['rect', 'circle', 'line'].includes(currentTool)) {
+    if (painting && ['rect', 'circle', 'line', 'gradient'].includes(currentTool)) {
         drawShapePreview();
+    }
+
+    // Draw Clone Source preview
+    if (currentTool === 'clone' && cloneSourceX !== null) {
+        mainCtx.save();
+        mainCtx.strokeStyle = '#000';
+        mainCtx.lineWidth = 1 / zoomLevel;
+        mainCtx.beginPath();
+        // Just a crosshair at source
+        // Since sourceX/Y are global, we transform them to view
+        const screenX = (cloneSourceX * zoomLevel) + panX;
+        const screenY = (cloneSourceY * zoomLevel) + panY;
+
+        // Wait, renderCanvas applies transforms. We should draw at cloneSourceX directly.
+        mainCtx.lineWidth = 2 / zoomLevel;
+        mainCtx.strokeStyle = 'rgba(0,0,0,0.5)';
+        const size = 10 / zoomLevel;
+        mainCtx.moveTo(cloneSourceX - size, cloneSourceY);
+        mainCtx.lineTo(cloneSourceX + size, cloneSourceY);
+        mainCtx.moveTo(cloneSourceX, cloneSourceY - size);
+        mainCtx.lineTo(cloneSourceX, cloneSourceY + size);
+        mainCtx.stroke();
+        mainCtx.restore();
     }
 
     mainCtx.restore(); // Restore context to default state (no transform)
@@ -484,6 +602,9 @@ document.getElementById('brush-opacity').addEventListener('input', (e) => {
 document.getElementById('primary-color').addEventListener('input', (e) => {
     brushColor = e.target.value;
 });
+document.getElementById('secondary-color').addEventListener('input', (e) => {
+    secondaryColor = e.target.value;
+});
 
 // --- Coordinate Helper ---
 function getCanvasCoordinates(e) {
@@ -525,7 +646,46 @@ function startPosition(e) {
         return;
     }
 
-    if (['fill', 'picker', 'text'].includes(currentTool)) return; // These are handled by click
+    // Clone Stamp Source Set (Alt + Click)
+    if (currentTool === 'clone' && e.altKey) {
+        cloneSourceX = startX;
+        cloneSourceY = startY;
+        console.log("Clone Source Set:", cloneSourceX, cloneSourceY);
+        renderCanvas();
+        return;
+    }
+
+    if (['fill', 'picker', 'text', 'wand'].includes(currentTool)) return; // These are handled by click
+
+    // Refresh Clone Source Snapshot
+    if (currentTool === 'clone' && !e.altKey) {
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = layerManager.width;
+        tempCanvas.height = layerManager.height;
+        const tCtx = tempCanvas.getContext('2d');
+
+        // Draw background checkerboard? No, just layers.
+        // Actually, we usually clone what is visible.
+        // Replicate render logic (without zoom/pan)
+        layerManager.layers.forEach(layer => {
+            if (!layer.visible) return;
+            tCtx.save();
+            tCtx.globalAlpha = layer.opacity;
+            tCtx.globalCompositeOperation = layer.blendMode;
+
+            const centerX = (layer.x || 0) + layer.canvas.width / 2;
+            const centerY = (layer.y || 0) + layer.canvas.height / 2;
+
+            tCtx.translate(centerX, centerY);
+            tCtx.rotate(layer.rotation || 0);
+            tCtx.scale(layer.scaleX || 1, layer.scaleY || 1);
+            tCtx.translate(-centerX, -centerY);
+
+            tCtx.drawImage(layer.canvas, layer.x || 0, layer.y || 0);
+            tCtx.restore();
+        });
+        window.cloneSourceImage = tempCanvas;
+    }
 
     painting = true;
 
@@ -534,7 +694,7 @@ function startPosition(e) {
         return;
     }
 
-    if (selectionManager.hasSelection && (currentTool === 'brush' || currentTool === 'eraser')) {
+    if (selectionManager.hasSelection && (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone')) {
         const layer = layerManager.getActiveLayer();
         if(layer) {
             layer.ctx.save();
@@ -542,7 +702,7 @@ function startPosition(e) {
         }
     }
 
-    if (currentTool === 'brush' || currentTool === 'eraser') {
+    if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone') {
         draw(e);
     }
 }
@@ -599,6 +759,54 @@ function endPosition(e) {
                 layer.ctx.moveTo(startX, startY);
                 layer.ctx.lineTo(endX, endY);
                 layer.ctx.stroke();
+            } else if (currentTool === 'gradient') {
+                // Apply Gradient
+                const grad = layer.ctx.createLinearGradient(startX, startY, endX, endY);
+                grad.addColorStop(0, brushColor);
+                grad.addColorStop(1, secondaryColor);
+
+                layer.ctx.fillStyle = grad;
+
+                // If selection exists, clip to it
+                if (selectionManager.hasSelection) {
+                    layer.ctx.save();
+                    // How to clip with the global selection mask?
+                    // We need to draw the mask to context with 'destination-in' logic
+                    // But we want to fill the area.
+                    // Correct approach:
+                    // 1. Fill a temp canvas/rect with gradient.
+                    // 2. Composite that onto layer using selection mask.
+                    // Or simpler: set clip if we had a path.
+                    // With raster mask:
+                    // Draw selection mask to layer with 'destination-in' to isolate gradient?
+                    // No, that erases existing content.
+
+                    // We need: (Layer Content) + (Gradient masked by Selection)
+                    // So:
+                    // 1. Draw gradient to layer (fills everything)
+                    // 2. Wait, that overwrites.
+
+                    // Correct:
+                    // 1. Draw gradient on temp canvas.
+                    // 2. Apply selection mask to temp canvas (make outside transparent).
+                    // 3. Draw temp canvas to layer.
+
+                    const temp = document.createElement('canvas');
+                    temp.width = layer.canvas.width;
+                    temp.height = layer.canvas.height;
+                    const tCtx = temp.getContext('2d');
+
+                    tCtx.fillStyle = grad;
+                    tCtx.fillRect(0,0, temp.width, temp.height);
+
+                    tCtx.globalCompositeOperation = 'destination-in';
+                    tCtx.drawImage(selectionManager.maskCanvas, -layer.x, -layer.y); // Transform mask to local space
+
+                    layer.ctx.drawImage(temp, 0, 0);
+                    layer.ctx.restore();
+                } else {
+                    layer.ctx.fillRect(0, 0, layer.canvas.width, layer.canvas.height);
+                }
             }
 
             layer.ctx.beginPath();
@@ -652,24 +860,126 @@ function draw(e) {
         return;
     }
 
-    // Handle Brush/Eraser (Real-time)
-    if (currentTool === 'brush') {
+    // Handle Brush/Eraser/Clone (Real-time)
+    if (currentTool === 'brush' || currentTool === 'clone') {
         const ctx = layer.ctx;
         ctx.save();
 
         const localX = (x - layer.x);
         const localY = (y - layer.y);
 
-        ctx.lineWidth = brushSize;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.strokeStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
+        if (currentTool === 'clone') {
+            if (cloneSourceX === null) return; // No source
 
-        ctx.lineTo(localX, localY);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(localX, localY);
+            // Clone logic:
+            // Calculate offset from start position to current position
+            // But wait, standard clone stamp works by fixed offset.
+            // Offset = (currentX - startX) + (cloneSourceX - startX_of_stroke?) NO
+            // Standard: Offset between source and destination is constant during stroke.
+            // Offset = (x - cloneSourceX) - wait.
+            // When we start stroke at startX, startY... we sample from cloneSourceX, cloneSourceY.
+            // diffX = cloneSourceX - startX
+            // diffY = cloneSourceY - startY
+            // sourceForPixel(x,y) = (x + diffX, y + diffY)
+
+            // However, implementing that with `ctx.lineTo` path stroke is hard because we need to texture map.
+            // Canvas Pattern?
+            // Yes, we can create a pattern from the visible canvas (or specific layer?) usually visible canvas.
+            // And offset the pattern matrix.
+
+            // For simplicity in this engine: Point-based drawing (stamps) for clone tool?
+            // Or efficient way:
+            // Draw using the image as a pattern.
+
+            // Let's assume we clone from the "Composite Image" (what you see).
+            // We need a snapshot of the canvas before the stroke started? Ideally yes.
+            // For now, let's grab the composite from mainCanvas? But mainCanvas has zoom.
+            // We need a flat composite.
+
+            // Doing it properly:
+            // 1. On `startPosition`, grab composite of all layers (flattened).
+            // 2. Create Pattern from it.
+            // 3. Set ctx.strokeStyle = pattern.
+            // 4. Translate pattern to match offset.
+
+            // Let's implement simplified "Stamp" drawing for clone to avoid complex pattern matrix updates per frame if we used lineTo.
+            // Actually, we can just stroke.
+
+            // We need a cached source image.
+            if (!window.cloneSourceImage) return;
+
+            const diffX = cloneSourceX - startX;
+            const diffY = cloneSourceY - startY;
+
+            // We need to set the pattern transform.
+            const pattern = ctx.createPattern(window.cloneSourceImage, 'no-repeat');
+            // The pattern needs to be shifted so that at (x,y) we see pixel at (x+diffX, y+diffY).
+            // Default pattern starts at 0,0 of destination.
+            // We want pixel at 0,0 of dest to correspond to diffX, diffY of source.
+            // So translate pattern by (diffX - layer.x, diffY - layer.y) because we draw in local layer space.
+
+            // Wait, logic:
+            // Source pixel (sx, sy) = (x + diffX, y + diffY)
+            // Pattern draws image at 0,0.
+            // We want image to be shifted so that the part at sx,sy appears at x,y.
+            // If we translate pattern by (dx, dy), then pixel at 0,0 takes value from image at -dx, -dy?
+            // Canvas pattern matrix logic is tricky.
+
+            // Alternative: clip to a small circle at x,y, draw image shifted.
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(localX, localY, brushSize/2, 0, Math.PI*2);
+            ctx.clip();
+            // Draw image shifted
+            // We want to draw the source image such that (sourceX) ends up at (startX)
+            // Shift = startX - cloneSourceX
+            // Local shift = (startX - layer.x) - cloneSourceX ??
+
+            // Let's simply draw the image:
+            // dest point: localX, localY
+            // source point: x + diffX, y + diffY  (Global coords)
+            // source point: (localX + layer.x) + diffX...
+
+            // We draw the full image at offset:
+            // offsetX = localX - (x + diffX) = -diffX - layer.x
+            // offsetY = -diffY - layer.y
+
+            // Actually, just:
+            // sourceX should correspond to startX.
+            // So if we draw image at (startX - cloneSourceX) relative to global?
+            // Draw image at (diffX, diffY)? No.
+
+            // Fixed offset logic:
+            // diffX = cloneSourceX - startX.
+            // When we are at startX, we want cloneSourceX.
+            // If we draw image at (startX - cloneSourceX, startY - cloneSourceY)...
+            // image pixel at (cloneSourceX) will be at (startX - cloneSourceX + cloneSourceX) = startX. Correct.
+
+            // Convert to local layer space:
+            // drawImage(img, (startX - cloneSourceX) - layer.x, (startY - cloneSourceY) - layer.y);
+
+            // But this draws the whole image every mouse move. Performance heavy?
+            // Yes. But clipping restricts it.
+
+            ctx.translate(startX - cloneSourceX - layer.x, startY - cloneSourceY - layer.y);
+            ctx.drawImage(window.cloneSourceImage, 0, 0);
+
+            ctx.restore();
+            // No stroke, we manually painted.
+
+        } else {
+            // Normal Brush
+            ctx.lineWidth = brushSize;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.strokeStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
+
+            ctx.lineTo(localX, localY);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(localX, localY);
+        }
 
         ctx.restore();
         renderCanvas();
@@ -718,6 +1028,18 @@ function drawShapePreview() {
         ctx.moveTo(startX, startY);
         ctx.lineTo(x, y);
         ctx.stroke();
+    } else if (currentTool === 'gradient') {
+        // Draw gradient vector line
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(x, y);
+        ctx.setLineDash([]);
+        ctx.stroke();
+
+        // Draw arrow head?
+        ctx.beginPath();
+        ctx.arc(startX, startY, 3, 0, Math.PI*2);
+        ctx.fill();
     }
 
     ctx.restore();
@@ -747,6 +1069,10 @@ function handleCanvasClick(e) {
         floodFill(layer, Math.floor(localX), Math.floor(localY), hexToRgba(brushColor));
         historyManager.saveState();
         renderCanvas();
+    } else if (currentTool === 'wand') {
+        // Magic Wand Logic
+        const tolerance = 30; // Hardcoded tolerance for now
+        magicWandSelection(layer, Math.floor(localX), Math.floor(localY), tolerance);
     } else if (currentTool === 'picker') {
         const pixel = layer.ctx.getImageData(localX, localY, 1, 1).data;
         const hex = rgbToHex(pixel[0], pixel[1], pixel[2]);
@@ -863,6 +1189,76 @@ function handleWheel(e) {
 
 // --- Algorithms ---
 
+function magicWandSelection(layer, startX, startY, tolerance) {
+    // Magic Wand behaves like flood fill but populates selection mask
+    const w = layer.canvas.width;
+    const h = layer.canvas.height;
+    const ctx = layer.ctx;
+
+    const imageData = ctx.getImageData(0, 0, w, h);
+    const data = imageData.data;
+
+    const startPos = (startY * w + startX) * 4;
+    const startColor = [data[startPos], data[startPos+1], data[startPos+2], data[startPos+3]];
+
+    // Prepare selection mask context
+    selectionManager.clearSelection();
+    selectionManager.hasSelection = true;
+    const maskImage = selectionManager.ctx.createImageData(w, h);
+    const maskData = maskImage.data;
+
+    const stack = [[startX, startY]];
+    const visited = new Set(); // To avoid infinite loops or re-checking
+
+    while(stack.length) {
+        const [x, y] = stack.pop();
+        const key = `${x},${y}`;
+        if (visited.has(key)) continue;
+        visited.add(key);
+
+        const pos = (y * w + x) * 4;
+
+        if (x < 0 || x >= w || y < 0 || y >= h) continue;
+
+        // Color Match with Tolerance
+        if (colorMatchTolerance(data, pos, startColor, tolerance)) {
+            // Set mask pixel to opaque (selected)
+            // But wait, mask is global. `x` and `y` here are local to layer.
+            // We need to map local (x, y) to global mask coordinates.
+            const globalX = Math.round(x + layer.x);
+            const globalY = Math.round(y + layer.y);
+
+            if (globalX >= 0 && globalX < selectionManager.width && globalY >= 0 && globalY < selectionManager.height) {
+                const maskPos = (globalY * selectionManager.width + globalX) * 4;
+                // Set mask red (visual debugging) or black/white
+                maskData[maskPos] = 0;   // R
+                maskData[maskPos+1] = 0; // G
+                maskData[maskPos+2] = 255; // B (Blue tint)
+                maskData[maskPos+3] = 255; // Alpha
+            }
+
+            stack.push([x+1, y]);
+            stack.push([x-1, y]);
+            stack.push([x, y+1]);
+            stack.push([x, y-1]);
+        }
+    }
+
+    selectionManager.ctx.putImageData(maskImage, 0, 0);
+    renderCanvas();
+}
+
+function colorMatchTolerance(data, pos, target, tolerance) {
+    const r = data[pos];
+    const g = data[pos+1];
+    const b = data[pos+2];
+    const a = data[pos+3];
+
+    // Simple Euclidean distance or just abs diff sum
+    const diff = Math.abs(r - target[0]) + Math.abs(g - target[1]) + Math.abs(b - target[2]) + Math.abs(a - target[3]);
+    return diff <= tolerance * 4;
+}
+
 // Flood Fill (Stack-based recursive simulation)
 function floodFill(layer, startX, startY, fillColor) {
     // fillColor is [r, g, b, a] (0-255)
@@ -934,8 +1330,8 @@ function setTool(tool) {
 
     document.querySelectorAll('.tool').forEach(el => el.classList.remove('active'));
     const map = {
-        'brush': 0, 'eraser': 1, 'move': 2, 'fill': 3, 'picker': 4, 'crop': 5,
-        'rect': 6, 'circle': 7, 'line': 8, 'text': 9, 'marquee': 10, 'lasso': 11
+        'brush': 0, 'eraser': 1, 'clone': 2, 'move': 3, 'fill': 4, 'gradient': 5, 'wand': 6, 'picker': 7, 'crop': 8,
+        'rect': 9, 'circle': 10, 'line': 11, 'text': 12, 'marquee': 13, 'lasso': 14
     };
     if (document.querySelectorAll('.tool')[map[tool]]) {
         document.querySelectorAll('.tool')[map[tool]].classList.add('active');
@@ -945,11 +1341,12 @@ function setTool(tool) {
 }
 
 function getCursorForTool(tool) {
-    if(tool === 'brush' || tool === 'eraser') return 'crosshair';
+    if(tool === 'brush' || tool === 'eraser' || tool === 'clone') return 'crosshair';
     else if(tool === 'move') return 'move';
     else if(tool === 'text') return 'text';
     else if(tool === 'picker') return 'cell';
     else if(tool === 'crop') return 'crosshair';
+    else if(tool === 'wand' || tool === 'gradient') return 'crosshair';
     return 'default';
 }
 
@@ -1032,6 +1429,98 @@ function newFile() {
         layerManager.layerCounter = 0;
         init();
     }
+}
+
+function saveProject() {
+    const project = {
+        width: layerManager.width,
+        height: layerManager.height,
+        layers: layerManager.layers.map(l => ({
+            id: l.id,
+            name: l.name,
+            visible: l.visible,
+            opacity: l.opacity,
+            blendMode: l.blendMode,
+            x: l.x,
+            y: l.y,
+            scaleX: l.scaleX,
+            scaleY: l.scaleY,
+            rotation: l.rotation,
+            data: l.canvas.toDataURL()
+        }))
+    };
+
+    const json = JSON.stringify(project);
+    const blob = new Blob([json], {type: "application/json"});
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = "webphoto-project.json";
+    link.click();
+}
+
+function loadProject(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const project = JSON.parse(e.target.result);
+            if (!project.layers) throw new Error("Invalid project file");
+
+            // Reset state
+            layerManager.layers = [];
+            layerManager.layerCounter = 0;
+
+            // Resize canvas if needed
+            if (project.width && project.height) {
+                mainCanvas.width = project.width;
+                mainCanvas.height = project.height;
+                layerManager.width = project.width;
+                layerManager.height = project.height;
+                selectionManager.width = project.width;
+                selectionManager.height = project.height;
+                selectionManager.maskCanvas.width = project.width;
+                selectionManager.maskCanvas.height = project.height;
+            }
+
+            // Load layers sequentially to maintain order
+            let loaded = 0;
+
+            project.layers.forEach((lData, index) => {
+                const layer = new Layer(lData.id, lData.name, mainCanvas.width, mainCanvas.height);
+                layer.visible = lData.visible;
+                layer.opacity = lData.opacity;
+                layer.blendMode = lData.blendMode;
+                layer.x = lData.x;
+                layer.y = lData.y;
+                layer.scaleX = lData.scaleX;
+                layer.scaleY = lData.scaleY;
+                layer.rotation = lData.rotation;
+
+                const img = new Image();
+                img.onload = () => {
+                    layer.ctx.drawImage(img, 0, 0);
+                    loaded++;
+                    if (loaded === project.layers.length) {
+                        layerManager.activeLayerId = layerManager.layers[layerManager.layers.length-1].id;
+                        renderLayerList();
+                        renderCanvas();
+                        historyManager.saveState();
+                    }
+                };
+                img.src = lData.data;
+
+                layerManager.layers.push(layer);
+                // Update counter
+                if (lData.id > layerManager.layerCounter) layerManager.layerCounter = lData.id;
+            });
+
+        } catch (err) {
+            alert("Error loading project: " + err.message);
+        }
+    };
+    reader.readAsText(file);
 }
 
 // --- Image Adjustments (Destructive) ---
@@ -1227,6 +1716,42 @@ function applyConvolution(ctx, w, h, kernel, maskData) {
 }
 
 // --- Histogram ---
+function transformLayer(type) {
+    const layer = layerManager.getActiveLayer();
+    if (!layer) {
+        alert("No active layer selected.");
+        return;
+    }
+
+    if (type === 'scale') {
+        const inputX = prompt("Enter Scale X (e.g., 1.0):", layer.scaleX || 1);
+        if (inputX === null) return;
+        const inputY = prompt("Enter Scale Y (e.g., 1.0):", layer.scaleY || (parseFloat(inputX) || 1)); // Default Y to X if not set
+        if (inputY === null) return;
+
+        const sx = parseFloat(inputX);
+        const sy = parseFloat(inputY);
+
+        if (!isNaN(sx) && !isNaN(sy)) {
+            layer.scaleX = sx;
+            layer.scaleY = sy;
+            historyManager.saveState();
+            renderCanvas();
+        }
+    } else if (type === 'rotate') {
+        const currentDeg = (layer.rotation || 0) * (180 / Math.PI);
+        const input = prompt("Enter Rotation (degrees):", Math.round(currentDeg));
+        if (input !== null) {
+            const deg = parseFloat(input);
+            if (!isNaN(deg)) {
+                layer.rotation = deg * (Math.PI / 180);
+                historyManager.saveState();
+                renderCanvas();
+            }
+        }
+    }
+}
+
 function updateHistogram() {
     const canvas = document.getElementById('histogram-canvas');
     if (!canvas) return;
@@ -1366,7 +1891,11 @@ window.addEventListener('keydown', (e) => {
 
     if(e.key === 'b') setTool('brush');
     if(e.key === 'e') setTool('eraser');
-    if(e.key === 'g') setTool('fill');
+    if(e.key === 's') setTool('clone'); // S for Stamp
+    if(e.key === 'g') {
+        if(e.shiftKey) setTool('gradient');
+        else setTool('fill');
+    }
     if(e.key === 'i') setTool('picker');
     if(e.key === 'c') setTool('crop');
     if(e.key === 'r') setTool('rect');
@@ -1375,6 +1904,7 @@ window.addEventListener('keydown', (e) => {
     if(e.key === 't') setTool('text');
     if(e.key === 'm') setTool('marquee');
     if(e.key === 'v') setTool('move');
+    if(e.key === 'w') setTool('wand');
     if(e.key === 'Escape') selectionManager.clearSelection();
     if(e.key === '[' && brushSize > 1) { brushSize--; document.getElementById('brush-size').value = brushSize; }
     if(e.key === ']') { brushSize++; document.getElementById('brush-size').value = brushSize; }
