@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebPhoto Pro - Photoshop Clone</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div id="menubar">
+        <div class="menu-item" onclick="toggleMenu('file-menu')">File
+            <div id="file-menu" class="dropdown-content">
+                <div onclick="newFile()">New</div>
+                <div onclick="document.getElementById('file-upload').click()">Open...</div>
+                <hr>
+                <div onclick="downloadImage()">Export as JPG</div>
+                <div onclick="downloadImage()">Export as PNG</div>
+            </div>
+        </div>
+        <div class="menu-item" onclick="toggleMenu('edit-menu')">Edit
+            <div id="edit-menu" class="dropdown-content">
+                <div onclick="historyManager.undo()">Undo (Ctrl+Z)</div>
+                <div onclick="historyManager.redo()">Redo (Ctrl+Y)</div>
+                <hr>
+                <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Cut</div>
+                <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Copy</div>
+                <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Paste</div>
+            </div>
+        </div>
+        <div class="menu-item" onclick="toggleMenu('image-menu')">Image
+            <div id="image-menu" class="dropdown-content">
+                <div onclick="applyImageAdjustment('brightness')">Brightness/Contrast...</div>
+                <div onclick="applyImageAdjustment('hue')">Hue/Saturation...</div>
+                <div onclick="applyImageAdjustment('invert')">Invert</div>
+            </div>
+        </div>
+        <div class="menu-item" onclick="toggleMenu('filter-menu')">Filter
+            <div id="filter-menu" class="dropdown-content">
+                <div onclick="applyImageAdjustment('blur')">Gaussian Blur...</div>
+                <div onclick="applyImageAdjustment('grayscale')">Grayscale</div>
+                <div onclick="applyImageAdjustment('sepia')">Sepia</div>
+            </div>
+        </div>
+        <div class="menu-item" onclick="toggleMenu('view-menu')">View
+            <div id="view-menu" class="dropdown-content">
+                <div onclick="alert('Zoom not implemented yet')">Zoom In</div>
+                <div onclick="alert('Zoom not implemented yet')">Zoom Out</div>
+                <div onclick="alert('Zoom not implemented yet')">Fit Screen</div>
+            </div>
+        </div>
+        <div class="menu-item" onclick="toggleMenu('window-menu')">Window
+            <div id="window-menu" class="dropdown-content">
+                <div onclick="document.getElementById('panels').classList.toggle('hidden')">Toggle Panels</div>
+            </div>
+        </div>
+        <div class="menu-item" onclick="toggleMenu('help-menu')">Help
+            <div id="help-menu" class="dropdown-content">
+                <div onclick="alert('WebPhoto Pro v1.0\nSimulated Photoshop Clone')">About</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="workspace">
+
+        <div id="toolbar">
+            <div class="tool active" title="Brush Tool (B)" onclick="setTool('brush')">🖌️</div>
+            <div class="tool" title="Eraser Tool (E)" onclick="setTool('eraser')">🧼</div>
+            <div class="tool" title="Move Tool (V)" onclick="setTool('move')">✥</div>
+            <div class="tool" title="Fill Bucket (G)" onclick="setTool('fill')">🪣</div>
+            <div class="tool" title="Eyedropper (I)" onclick="setTool('picker')">🖊️</div>
+            <div class="tool" title="Rectangle (R)" onclick="setTool('rect')">⬜</div>
+            <div class="tool" title="Circle (C)" onclick="setTool('circle')">⭕</div>
+            <div class="tool" title="Line (L)" onclick="setTool('line')">📏</div>
+            <div class="tool" title="Text (T)" onclick="setTool('text')">TXT</div>
+            <div class="tool" title="Marquee Select (M)" onclick="setTool('marquee')">⚃</div>
+            <div class="tool" title="Lasso Select (L)" onclick="setTool('lasso')">➰</div>
+            <div class="tool" title="Clear Selection (Esc)" onclick="selectionManager.clearSelection()">✖</div>
+            <div style="flex:1"></div>
+            <input type="color" id="primary-color" value="#000000" title="Primary Color">
+        </div>
+
+        <div style="flex: 1; display: flex; flex-direction: column;">
+            <div id="options-bar">
+                <span>Size:</span>
+                <input type="range" id="brush-size" min="1" max="100" value="10" style="width: 100px;">
+                <span id="brush-size-val">10px</span>
+
+                <span style="margin-left: 10px;">Opacity:</span>
+                <input type="range" id="brush-opacity" min="1" max="100" value="100" style="width: 100px;">
+                <span id="brush-opacity-val">100%</span>
+
+                <span style="margin-left: auto;">Smoothing: 10%</span>
+            </div>
+
+            <div id="canvas-area">
+                <canvas id="main-canvas" width="800" height="600"></canvas>
+            </div>
+        </div>
+
+        <div id="panels">
+
+            <div class="panel-header">Navigator & Info</div>
+            <div class="panel-content" style="height: 150px; display:flex; justify-content:center; align-items:center; color:#555;">
+                [Histogram Placeholder]
+            </div>
+
+            <div class="panel-header">Quick Actions</div>
+            <div class="panel-content">
+                <button onclick="applyImageAdjustment('brightness')">Brightness/Contrast</button>
+                <button onclick="applyImageAdjustment('hue')">Hue/Saturation</button>
+                <button onclick="applyImageAdjustment('invert')">Invert</button>
+                <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
+                <input type="file" id="file-upload" style="display: none;" onchange="handleFileUpload(this)">
+                <button onclick="document.getElementById('file-upload').click()">Open Image</button>
+            </div>
+
+            <div class="panel-header">Layers</div>
+            <div class="panel-content" style="padding: 5px;">
+                <select id="blend-mode" onchange="layerManager.setBlendMode(this.value)" style="width:100%; margin-bottom:5px;">
+                    <option value="source-over">Normal</option>
+                    <option value="multiply">Multiply</option>
+                    <option value="screen">Screen</option>
+                    <option value="overlay">Overlay</option>
+                    <option value="darken">Darken</option>
+                    <option value="lighten">Lighten</option>
+                    <option value="color-dodge">Color Dodge</option>
+                    <option value="color-burn">Color Burn</option>
+                    <option value="hard-light">Hard Light</option>
+                    <option value="soft-light">Soft Light</option>
+                    <option value="difference">Difference</option>
+                    <option value="exclusion">Exclusion</option>
+                </select>
+                <div class="input-group">
+                    <span class="input-label">Layer Opacity</span>
+                    <input type="range" min="0" max="1" step="0.01" value="1" onchange="layerManager.setOpacity(this.value)">
+                </div>
+            </div>
+            <div id="layer-list">
+                <!-- Layer items populated by JS -->
+            </div>
+            <div class="panel-header" style="border-top:none; display:flex; justify-content:flex-end;">
+                <span style="cursor:pointer; padding:0 10px;" title="New Layer" onclick="layerManager.addLayer()">📄 +</span>
+                <span style="cursor:pointer; padding:0 10px;" title="Delete Layer" onclick="layerManager.deleteActiveLayer()">🗑️</span>
+                <span style="cursor:pointer; padding:0 10px;" title="Move Up" onclick="layerManager.moveLayer(1)">⬆️</span>
+                <span style="cursor:pointer; padding:0 10px;" title="Move Down" onclick="layerManager.moveLayer(-1)">⬇️</span>
+            </div>
+
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
