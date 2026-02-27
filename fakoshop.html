@@ -141,6 +141,12 @@ body {
     border-left: 1px solid var(--border);
     display: flex;
     flex-direction: column;
+    resize: horizontal;
+    overflow: auto;
+    direction: rtl; /* Allows resize handle to appear on the left in RTL, though imperfect */
+}
+#panels > * {
+    direction: ltr; /* Reset children to LTR */
 }
 .panel-header {
     padding: 8px 10px;
@@ -208,6 +214,7 @@ button:hover { background-color: #5a5a5a; }
                 <hr>
                 <div onclick="transformLayer('scale')">Scale Layer...</div>
                 <div onclick="transformLayer('rotate')">Rotate Layer...</div>
+                <div onclick="applyLayerStyle('shadow')">Drop Shadow...</div>
                 <hr>
                 <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Cut</div>
                 <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Copy</div>
@@ -259,6 +266,11 @@ button:hover { background-color: #5a5a5a; }
             <div class="tool active" title="Brush Tool (B)" onclick="setTool('brush')">🖌️</div>
             <div class="tool" title="Eraser Tool (E)" onclick="setTool('eraser')">🧼</div>
             <div class="tool" title="Clone Stamp (S)" onclick="setTool('clone')">©</div>
+            <div class="tool" title="Smudge Tool" onclick="setTool('smudge')">👆</div>
+            <div class="tool" title="Blur Tool" onclick="setTool('blur-brush')">💧</div>
+            <div class="tool" title="Sharpen Tool" onclick="setTool('sharpen-brush')">🔺</div>
+            <div class="tool" title="Dodge Tool" onclick="setTool('dodge')">💡</div>
+            <div class="tool" title="Burn Tool" onclick="setTool('burn')">🔥</div>
             <div class="tool" title="Move Tool (V)" onclick="setTool('move')">✥</div>
             <div class="tool" title="Fill Bucket (G)" onclick="setTool('fill')">🪣</div>
             <div class="tool" title="Gradient (Shift+G)" onclick="setTool('gradient')">🌈</div>
@@ -272,6 +284,10 @@ button:hover { background-color: #5a5a5a; }
             <div class="tool" title="Marquee Select (M)" onclick="setTool('marquee')">⚃</div>
             <div class="tool" title="Lasso Select (L)" onclick="setTool('lasso')">➰</div>
             <div class="tool" title="Polygon Lasso (P)" onclick="setTool('poly-lasso')">📐</div>
+            <div class="tool" title="Pen Tool (P)" onclick="setTool('pen')">🖋️</div>
+            <div class="tool" title="Polygon Shape" onclick="setTool('polygon')">⬠</div>
+            <div class="tool" title="Star Shape" onclick="setTool('star')">⭐</div>
+            <div class="tool" title="Rounded Rectangle" onclick="setTool('rounded-rect')">▢</div>
             <div class="tool" title="Clear Selection (Esc)" onclick="selectionManager.clearSelection()">✖</div>
             <div style="flex:1"></div>
 
@@ -312,6 +328,12 @@ button:hover { background-color: #5a5a5a; }
                 <div id="shape-options" style="display: none; margin-left: 10px; align-items: center; gap: 10px;">
                      <label><input type="checkbox" id="shape-fill" checked> Fill</label>
                      <label><input type="checkbox" id="shape-stroke"> Stroke</label>
+                     <div id="extra-shape-options" style="display: none; align-items: center; gap: 5px; margin-left: 5px;">
+                         <span id="sides-label">Sides/Points:</span>
+                         <input type="number" id="shape-sides" value="5" min="3" max="20" style="width: 40px;">
+                         <span id="radius-label" style="display: none;">Radius:</span>
+                         <input type="number" id="shape-radius" value="10" min="0" max="100" style="width: 40px; display: none;">
+                     </div>
                 </div>
 
                 <div id="text-options" style="display: none; margin-left: 10px; align-items: center; gap: 5px;">
@@ -383,6 +405,7 @@ button:hover { background-color: #5a5a5a; }
                 <!-- Layer items populated by JS -->
             </div>
             <div class="panel-header" style="border-top:none; display:flex; justify-content:flex-end;">
+                <span style="cursor:pointer; padding:0 5px;" title="New Layer Mask" onclick="layerManager.addMaskToActive()">⬜</span>
                 <span style="cursor:pointer; padding:0 5px;" title="New Layer" onclick="layerManager.addLayer()">📄 +</span>
                 <span style="cursor:pointer; padding:0 5px;" title="Duplicate Layer" onclick="layerManager.duplicateActiveLayer()">📄 ²</span>
                 <span style="cursor:pointer; padding:0 5px;" title="Merge Down" onclick="layerManager.mergeDown()">⏬</span>
@@ -408,6 +431,11 @@ class Layer {
         this.scaleX = 1;
         this.scaleY = 1;
         this.rotation = 0; // in radians
+
+        // Mask
+        this.maskCanvas = null;
+        this.maskCtx = null;
+        this.editingMask = false;
 
         // Off-screen canvas for this layer
         this.canvas = document.createElement('canvas');
@@ -806,6 +834,8 @@ let fontBold = false;
 let fontItalic = false;
 let wandTolerance = 30;
 let polygonPoints = []; // For Polygon Lasso
+let penPath = []; // For Pen Tool [{x, y, type: 'M'|'L'|'Q'|'C', cp1x, cp1y, cp2x, cp2y}]
+let isDraggingPen = false;
 let colorHistory = [];
 let startX, startY; // For shape tools
 
@@ -897,7 +927,30 @@ function renderCanvas() {
         mainCtx.scale(layer.scaleX || 1, layer.scaleY || 1);
         mainCtx.translate(-centerX, -centerY);
 
-        mainCtx.drawImage(layer.canvas, layer.x || 0, layer.y || 0);
+        if (layer.maskCanvas) {
+            // To apply mask, we need to draw the layer to a temporary canvas,
+            // apply the mask using destination-in, and then draw the result.
+            // This is because we might also have transformations on the layer.
+            const tCanvas = document.createElement('canvas');
+            tCanvas.width = layer.canvas.width;
+            tCanvas.height = layer.canvas.height;
+            const tCtx = tCanvas.getContext('2d');
+
+            tCtx.drawImage(layer.canvas, 0, 0);
+            tCtx.globalCompositeOperation = 'destination-in';
+            // Draw mask using luminance or just alpha. Since we use b/w for masks usually,
+            // standard canvas destination-in uses alpha channel.
+            // If the user paints with black, it should create transparency.
+            // We need to convert mask luminance to alpha.
+            // Better: When user paints on mask, we ensure they only affect alpha or we process the mask here.
+            // For simplicity, let's assume the user paints directly with rgba(0,0,0,alpha) to erase.
+            tCtx.drawImage(layer.maskCanvas, 0, 0);
+
+            mainCtx.drawImage(tCanvas, layer.x || 0, layer.y || 0);
+        } else {
+            mainCtx.drawImage(layer.canvas, layer.x || 0, layer.y || 0);
+        }
+
         mainCtx.restore();
     });
 
@@ -947,6 +1000,90 @@ function renderCanvas() {
     // Draw Preview for shapes (if painting)
     if (painting && ['rect', 'circle', 'line', 'gradient'].includes(currentTool)) {
         drawShapePreview();
+    }
+
+    // Draw Pen Path Preview
+    if (currentTool === 'pen' && penPath.length > 0) {
+        mainCtx.save();
+        mainCtx.lineWidth = 2 / zoomLevel;
+        mainCtx.strokeStyle = '#0078d7';
+        mainCtx.beginPath();
+        for (let i = 0; i < penPath.length; i++) {
+            const pt = penPath[i];
+            if (pt.type === 'M') {
+                mainCtx.moveTo(pt.x, pt.y);
+            } else if (pt.type === 'L') {
+                mainCtx.lineTo(pt.x, pt.y);
+            } else if (pt.type === 'Q') {
+                mainCtx.quadraticCurveTo(pt.cp1x, pt.cp1y, pt.x, pt.y);
+            } else if (pt.type === 'C') {
+                mainCtx.bezierCurveTo(pt.cp1x, pt.cp1y, pt.cp2x, pt.cp2y, pt.x, pt.y);
+            }
+        }
+
+        // Line to current mouse or drag curve preview
+        if (window.lastMouseX !== undefined) {
+            if (isDraggingPen) {
+                // We are dragging the current node's control point
+                // Control point is reflected from the drag point
+                const currentX = startX;
+                const currentY = startY;
+                const cpX = window.lastMouseX;
+                const cpY = window.lastMouseY;
+
+                // Draw line to current node
+                mainCtx.lineTo(currentX, currentY);
+
+                // Draw handle (from current to mouse)
+                mainCtx.save();
+                mainCtx.strokeStyle = '#aaa';
+                mainCtx.lineWidth = 1 / zoomLevel;
+                mainCtx.beginPath();
+                mainCtx.moveTo(currentX, currentY);
+                mainCtx.lineTo(cpX, cpY);
+                // Draw reflected handle
+                const rX = currentX - (cpX - currentX);
+                const rY = currentY - (cpY - currentY);
+                mainCtx.moveTo(currentX, currentY);
+                mainCtx.lineTo(rX, rY);
+                mainCtx.stroke();
+
+                // Draw handle ends
+                mainCtx.fillStyle = '#fff';
+                mainCtx.fillRect(cpX-2, cpY-2, 4, 4);
+                mainCtx.fillRect(rX-2, rY-2, 4, 4);
+                mainCtx.restore();
+
+            } else {
+                 // Not dragging, just moving mouse to place next point
+                 // Draw preview line to mouse
+                 if (penPath.length > 0) {
+                     const last = penPath[penPath.length - 1];
+                     if (last.type === 'Q' || last.type === 'C' || last.cp2x) {
+                          // Previous node had a handle. The control point for the incoming curve is the reflection of the outgoing handle
+                          // Last point's OUTGOING handle was recorded as cp2x, cp2y. Wait, let's keep it simple.
+                          // Real pen tool preview requires C. We will just draw a line for now to keep preview simple,
+                          // or draw quadratic if we want to show curve preview.
+                          // Actually, a simple line is fine for previewing next anchor location.
+                          mainCtx.lineTo(window.lastMouseX, window.lastMouseY);
+                     } else {
+                          mainCtx.lineTo(window.lastMouseX, window.lastMouseY);
+                     }
+                 }
+            }
+        }
+        mainCtx.stroke();
+
+        // Draw path nodes
+        mainCtx.fillStyle = '#fff';
+        mainCtx.strokeStyle = '#000';
+        mainCtx.lineWidth = 1 / zoomLevel;
+        const ptSize = 6 / zoomLevel;
+        penPath.forEach(pt => {
+            mainCtx.fillRect(pt.x - ptSize/2, pt.y - ptSize/2, ptSize, ptSize);
+            mainCtx.strokeRect(pt.x - ptSize/2, pt.y - ptSize/2, ptSize, ptSize);
+        });
+        mainCtx.restore();
     }
 
     // Draw Polygon Lasso Preview
@@ -1022,6 +1159,27 @@ function drawCheckerboard(ctx, w, h) {
     }
 }
 
+function applyLayerStyle(type) {
+    const layer = layerManager.getActiveLayer();
+    if (!layer) return;
+
+    if (type === 'shadow') {
+        const color = prompt("Enter Shadow Color (Hex or rgba):", layer.shadowColor || 'rgba(0,0,0,0.5)');
+        if (!color) return;
+        const blur = prompt("Enter Blur Radius:", layer.shadowBlur || 10);
+        const offsetX = prompt("Enter Offset X:", layer.shadowOffsetX || 5);
+        const offsetY = prompt("Enter Offset Y:", layer.shadowOffsetY || 5);
+
+        layer.shadowColor = color;
+        layer.shadowBlur = parseFloat(blur) || 0;
+        layer.shadowOffsetX = parseFloat(offsetX) || 0;
+        layer.shadowOffsetY = parseFloat(offsetY) || 0;
+
+        historyManager.saveState();
+        renderCanvas();
+    }
+}
+
 function renderLayerList() {
     const list = document.getElementById('layer-list');
     list.innerHTML = '';
@@ -1082,6 +1240,11 @@ document.getElementById('secondary-color').addEventListener('input', (e) => {
 });
 
 // New UI Listeners
+let shapeSides = 5;
+let shapeRadius = 10;
+document.getElementById('shape-sides').addEventListener('input', (e) => { shapeSides = parseInt(e.target.value) || 5; });
+document.getElementById('shape-radius').addEventListener('input', (e) => { shapeRadius = parseInt(e.target.value) || 10; });
+
 document.getElementById('brush-hardness').addEventListener('input', (e) => {
     brushHardness = parseInt(e.target.value);
     document.getElementById('brush-hardness-val').innerText = brushHardness + '%';
@@ -1171,6 +1334,15 @@ function startPosition(e) {
 
     if (['fill', 'picker', 'text', 'wand', 'poly-lasso'].includes(currentTool)) return; // These are handled by click (poly-lasso needs special click handling)
 
+    if (currentTool === 'pen') {
+        isDraggingPen = true;
+        // Pen tool drag means manipulating the handle for the point we just added in click
+        // Or if we mouse down and drag, we are setting the handle for a new node.
+        // Let's modify behavior: click places node, drag sets its handle.
+        // We handle the actual node placement in mouseup to see if it was a drag or click.
+        return;
+    }
+
     // Refresh Clone Source Snapshot
     if (currentTool === 'clone' && !e.altKey) {
         const tempCanvas = document.createElement('canvas');
@@ -1226,7 +1398,8 @@ function startPosition(e) {
         renderCanvas();
     }
 
-    if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone') {
+    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn'];
+    if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone' || advancedBrushes.includes(currentTool)) {
         if (isAirbrush && currentTool === 'brush') {
             // Start Airbrush
             clearInterval(airbrushInterval);
@@ -1262,6 +1435,71 @@ function endPosition(e) {
             return;
         }
 
+        if (currentTool === 'pen') {
+            isDraggingPen = false;
+
+            // Calculate if it was a click or a drag
+            const dist = Math.hypot(endX - startX, endY - startY);
+
+            if (penPath.length === 0) {
+                 if (dist < 2) {
+                     penPath.push({x: startX, y: startY, type: 'M'});
+                 } else {
+                     // Drag on first point sets initial control handle (which affects the NEXT segment's starting angle, but for M it's often ignored or used for C)
+                     // For simplicity, we just store it as M with an outgoing handle
+                     penPath.push({x: startX, y: startY, type: 'M', outX: startX - (endX - startX), outY: startY - (endY - startY)});
+                 }
+            } else {
+                 // Check if clicking near start to close
+                 const startPt = penPath[0];
+                 const closeDist = Math.hypot(startX - startPt.x, startY - startPt.y);
+                 if (closeDist < 10 / zoomLevel) {
+                     // Close path and rasterize
+                     if (dist > 2) {
+                         // Curving into the close
+                         const prev = penPath[penPath.length-1];
+                         const cp1x = prev.outX !== undefined ? prev.outX : prev.x;
+                         const cp1y = prev.outY !== undefined ? prev.outY : prev.y;
+                         const cp2x = endX; // The handle pulled out from the start point
+                         const cp2y = endY;
+                         penPath.push({x: startPt.x, y: startPt.y, type: 'C', cp1x, cp1y, cp2x, cp2y});
+                     } else {
+                         penPath.push({x: startPt.x, y: startPt.y, type: 'L'});
+                     }
+                     commitPenPath();
+                     penPath = [];
+                     renderCanvas();
+                     return;
+                 }
+
+                 // Add new point
+                 const prev = penPath[penPath.length-1];
+                 const cp1x = prev.outX !== undefined ? prev.outX : prev.x;
+                 const cp1y = prev.outY !== undefined ? prev.outY : prev.y;
+
+                 if (dist < 2) {
+                     // Straight line or curve to sharp point
+                     if (prev.outX !== undefined) {
+                          penPath.push({x: startX, y: startY, type: 'Q', cp1x: cp1x, cp1y: cp1y});
+                     } else {
+                          penPath.push({x: startX, y: startY, type: 'L'});
+                     }
+                 } else {
+                     // Dragged, creates a smooth curve node.
+                     // The mouse (endX, endY) defines the INCOMING handle (cp2).
+                     // The OUTGOING handle is the reflection.
+                     const cp2x = endX;
+                     const cp2y = endY;
+                     const outX = startX - (endX - startX);
+                     const outY = startY - (endY - startY);
+
+                     penPath.push({x: startX, y: startY, type: 'C', cp1x, cp1y, cp2x, cp2y, outX, outY});
+                 }
+            }
+            renderCanvas();
+            return;
+        }
+
         if (currentTool === 'marquee' || currentTool === 'lasso' || currentTool === 'crop') {
             selectionManager.endSelection(endX, endY);
             if (currentTool === 'crop') {
@@ -1279,36 +1517,68 @@ function endPosition(e) {
             }
 
              // Commit shapes
-            if (currentTool === 'rect') {
-                if (shapeFill) {
-                    layer.ctx.fillStyle = brushColor;
-                    layer.ctx.fillRect(startX, startY, endX - startX, endY - startY);
-                }
-                if (shapeStroke) {
-                    layer.ctx.strokeStyle = brushColor;
-                    layer.ctx.lineWidth = brushSize;
-                    layer.ctx.strokeRect(startX, startY, endX - startX, endY - startY);
-                }
-            } else if (currentTool === 'circle') {
-                const radius = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
+            if (['rect', 'circle', 'line', 'rounded-rect', 'polygon', 'star'].includes(currentTool)) {
                 layer.ctx.beginPath();
-                layer.ctx.arc(startX, startY, radius, 0, Math.PI * 2);
-                if (shapeFill) {
-                    layer.ctx.fillStyle = brushColor;
-                    layer.ctx.fill();
-                }
-                if (shapeStroke) {
-                    layer.ctx.strokeStyle = brushColor;
-                    layer.ctx.lineWidth = brushSize;
-                    layer.ctx.stroke();
-                }
-            } else if (currentTool === 'line') {
+                layer.ctx.fillStyle = brushColor;
                 layer.ctx.strokeStyle = brushColor;
                 layer.ctx.lineWidth = brushSize;
-                layer.ctx.beginPath();
-                layer.ctx.moveTo(startX, startY);
-                layer.ctx.lineTo(endX, endY);
-                layer.ctx.stroke();
+                layer.ctx.lineJoin = 'round';
+
+                if (currentTool === 'rect') {
+                    layer.ctx.rect(startX, startY, endX - startX, endY - startY);
+                } else if (currentTool === 'circle') {
+                    const radius = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
+                    layer.ctx.arc(startX, startY, radius, 0, Math.PI * 2);
+                } else if (currentTool === 'line') {
+                    layer.ctx.moveTo(startX, startY);
+                    layer.ctx.lineTo(endX, endY);
+                } else if (currentTool === 'rounded-rect') {
+                    const w = endX - startX;
+                    const h = endY - startY;
+                    const r = Math.min(shapeRadius, Math.abs(w)/2, Math.abs(h)/2);
+                    const x = startX;
+                    const y = startY;
+                    layer.ctx.moveTo(x + r, y);
+                    layer.ctx.lineTo(x + w - r, y);
+                    layer.ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+                    layer.ctx.lineTo(x + w, y + h - r);
+                    layer.ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+                    layer.ctx.lineTo(x + r, y + h);
+                    layer.ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+                    layer.ctx.lineTo(x, y + r);
+                    layer.ctx.quadraticCurveTo(x, y, x + r, y);
+                } else if (currentTool === 'polygon' || currentTool === 'star') {
+                    const cx = startX;
+                    const cy = startY;
+                    const outerRadius = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
+                    const angleStep = Math.PI / shapeSides;
+                    let angle = -Math.PI / 2;
+
+                    if (currentTool === 'star') {
+                        const innerRadius = outerRadius * 0.5;
+                        layer.ctx.moveTo(cx + Math.cos(angle) * outerRadius, cy + Math.sin(angle) * outerRadius);
+                        for (let i = 0; i < shapeSides; i++) {
+                            angle += angleStep;
+                            layer.ctx.lineTo(cx + Math.cos(angle) * innerRadius, cy + Math.sin(angle) * innerRadius);
+                            angle += angleStep;
+                            layer.ctx.lineTo(cx + Math.cos(angle) * outerRadius, cy + Math.sin(angle) * outerRadius);
+                        }
+                    } else { // polygon
+                        layer.ctx.moveTo(cx + Math.cos(angle) * outerRadius, cy + Math.sin(angle) * outerRadius);
+                        for (let i = 0; i < shapeSides; i++) {
+                            angle += angleStep * 2;
+                            layer.ctx.lineTo(cx + Math.cos(angle) * outerRadius, cy + Math.sin(angle) * outerRadius);
+                        }
+                    }
+                    layer.ctx.closePath();
+                }
+
+                if (currentTool === 'line') {
+                    layer.ctx.stroke();
+                } else {
+                    if (shapeFill) layer.ctx.fill();
+                    if (shapeStroke) layer.ctx.stroke();
+                }
             } else if (currentTool === 'gradient') {
                 // Apply Gradient
                 const grad = layer.ctx.createLinearGradient(startX, startY, endX, endY);
@@ -1436,6 +1706,11 @@ function draw(e) {
     window.lastMouseX = x;
     window.lastMouseY = y;
 
+    if (currentTool === 'pen' && isDraggingPen) {
+        renderCanvas();
+        return;
+    }
+
     if (!painting) return;
 
     const layer = layerManager.getActiveLayer();
@@ -1458,8 +1733,9 @@ function draw(e) {
         return;
     }
 
-    // Handle Brush/Eraser/Clone (Real-time)
-    if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone') {
+    // Handle Brush/Eraser/Clone/Advanced Brushes (Real-time)
+    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn'];
+    if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone' || advancedBrushes.includes(currentTool)) {
 
         // If Airbrush is on, we just update coordinates for the interval loop and return
         if (isAirbrush && currentTool === 'brush') {
@@ -1664,6 +1940,180 @@ function draw(e) {
             // Store last position specifically for brush interpolation
             window.lastX = localX;
             window.lastY = localY;
+        } else if (advancedBrushes.includes(currentTool)) {
+            // Advanced Brushes (Smudge, Blur, Sharpen, Dodge, Burn)
+            // Need to read pixels around the brush, process them, and write back.
+            const r = Math.ceil(brushSize / 2);
+
+            // For smudge, we might need to sample from further back if moving fast.
+            // Calculate a combined bounding box that includes the previous position
+            let sampleMinX = Math.floor(localX - r);
+            let sampleMinY = Math.floor(localY - r);
+            let sampleMaxX = Math.ceil(localX + r);
+            let sampleMaxY = Math.ceil(localY + r);
+
+            if (currentTool === 'smudge' && window.lastX !== undefined) {
+                 sampleMinX = Math.floor(Math.min(localX - r, window.lastX - r));
+                 sampleMinY = Math.floor(Math.min(localY - r, window.lastY - r));
+                 sampleMaxX = Math.ceil(Math.max(localX + r, window.lastX + r));
+                 sampleMaxY = Math.ceil(Math.max(localY + r, window.lastY + r));
+            }
+
+            // Limit bounds to canvas size
+            const minX = Math.max(0, sampleMinX);
+            const minY = Math.max(0, sampleMinY);
+            const maxX = Math.min(layer.canvas.width, sampleMaxX);
+            const maxY = Math.min(layer.canvas.height, sampleMaxY);
+
+            const bw = maxX - minX;
+            const bh = maxY - minY;
+
+            if (bw > 0 && bh > 0) {
+                const imgData = ctx.getImageData(minX, minY, bw, bh);
+                const data = imgData.data;
+                const newImgData = ctx.createImageData(bw, bh);
+                const newData = newImgData.data;
+                newData.set(data); // Copy original as base
+
+                // Use an appropriately scaled strength (brushOpacity is 0-1)
+                // Note: The input listener sets brushOpacity = e.target.value / 100, so it is already 0-1.
+                // However, for Dodge/Burn, 0-1 as a direct multiplier per frame is still too strong.
+                // We need to scale the effect per tick.
+                const strength = brushOpacity;
+
+                if (currentTool === 'smudge') {
+                    // Pull pixels from previous mouse position
+                    if (window.lastX !== undefined && window.lastY !== undefined) {
+                        const dx = localX - window.lastX;
+                        const dy = localY - window.lastY;
+
+                        // Steps for interpolation if mouse moved fast
+                        const dist = Math.hypot(dx, dy);
+                        const steps = Math.max(1, Math.ceil(dist / (r * 0.5))); // Interpolate heavily
+
+                        for (let s = 1; s <= steps; s++) {
+                             const t = s / steps;
+                             const curX = window.lastX + dx * t;
+                             const curY = window.lastY + dy * t;
+
+                             // Small offset vector for source pixel
+                             const sdx = dx / steps;
+                             const sdy = dy / steps;
+
+                             for (let py = 0; py < bh; py++) {
+                                for (let px = 0; px < bw; px++) {
+                                    const realX = px + minX;
+                                    const realY = py + minY;
+
+                                    const dCenter = Math.hypot(realX - curX, realY - curY);
+                                    if (dCenter <= r) {
+                                        // Soft edge falloff
+                                        const falloff = 1 - (dCenter / r);
+                                        const effect = falloff * strength * 0.5; // Scale down for multi-step
+
+                                        // Source pixel coords (behind current step)
+                                        let sx = Math.round(px - sdx);
+                                        let sy = Math.round(py - sdy);
+
+                                        // Only sample if source is within the fetched box
+                                        if (sx >= 0 && sx < bw && sy >= 0 && sy < bh) {
+                                            const sIdx = (sy * bw + sx) * 4;
+                                            const dIdx = (py * bw + px) * 4;
+
+                                            // Blend (reading from newData so intermediate steps affect each other, or data for independent? newData better for smudge)
+                                            newData[dIdx] = newData[dIdx] * (1 - effect) + newData[sIdx] * effect;
+                                            newData[dIdx+1] = newData[dIdx+1] * (1 - effect) + newData[sIdx+1] * effect;
+                                            newData[dIdx+2] = newData[dIdx+2] * (1 - effect) + newData[sIdx+2] * effect;
+                                            newData[dIdx+3] = newData[dIdx+3] * (1 - effect) + newData[sIdx+3] * effect;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (currentTool === 'dodge' || currentTool === 'burn') {
+                    // Scale strength to be mild per-tick (max 5% change per tick at 100% opacity)
+                    const effectStrength = strength * 0.05;
+                    const factor = currentTool === 'dodge' ? (1 + effectStrength) : (1 - effectStrength);
+
+                    for (let py = 0; py < bh; py++) {
+                        for (let px = 0; px < bw; px++) {
+                            const realX = px + minX;
+                            const realY = py + minY;
+                            const dCenter = Math.hypot(realX - localX, realY - localY);
+
+                            if (dCenter <= r) {
+                                const falloff = 1 - (dCenter / r);
+                                const currentFactor = 1 + (factor - 1) * falloff;
+                                const idx = (py * bw + px) * 4;
+
+                                if (newData[idx+3] > 0) { // Only affect non-transparent
+                                    newData[idx] = Math.min(255, Math.max(0, newData[idx] * currentFactor));
+                                    newData[idx+1] = Math.min(255, Math.max(0, newData[idx+1] * currentFactor));
+                                    newData[idx+2] = Math.min(255, Math.max(0, newData[idx+2] * currentFactor));
+                                }
+                            }
+                        }
+                    }
+                } else if (currentTool === 'blur-brush' || currentTool === 'sharpen-brush') {
+                    // Mini convolution kernel for brush area
+                    let kernel;
+                    if (currentTool === 'blur-brush') {
+                        kernel = [1/9, 1/9, 1/9, 1/9, 1/9, 1/9, 1/9, 1/9, 1/9];
+                    } else {
+                        // Mild sharpen to prevent artifacts
+                        kernel = [0, -0.5, 0, -0.5, 3, -0.5, 0, -0.5, 0];
+                    }
+
+                    const kSide = 3;
+                    const halfK = 1;
+
+                    for (let py = 0; py < bh; py++) {
+                        for (let px = 0; px < bw; px++) {
+                            const realX = px + minX;
+                            const realY = py + minY;
+                            const dCenter = Math.hypot(realX - localX, realY - localY);
+
+                            if (dCenter <= r) {
+                                const falloff = 1 - (dCenter / r);
+                                // Limit blur/sharpen effect per tick
+                                const effect = falloff * strength * 0.3;
+                                const idx = (py * bw + px) * 4;
+
+                                if (newData[idx+3] > 0) {
+                                    let r_val = 0, g = 0, b = 0;
+                                    let wSum = 0;
+                                    for (let ky = 0; ky < kSide; ky++) {
+                                        for (let kx = 0; kx < kSide; kx++) {
+                                            const scy = py + ky - halfK;
+                                            const scx = px + kx - halfK;
+                                            if (scy >= 0 && scy < bh && scx >= 0 && scx < bw) {
+                                                const sIdx = (scy * bw + scx) * 4;
+                                                const wt = kernel[ky * kSide + kx];
+                                                r_val += data[sIdx] * wt;
+                                                g += data[sIdx+1] * wt;
+                                                b += data[sIdx+2] * wt;
+                                                wSum += wt;
+                                            }
+                                        }
+                                    }
+                                    if (wSum > 0) { r_val/=wSum; g/=wSum; b/=wSum; }
+
+                                    // Use newData for current state so effect doesn't just read from original unmodified frame state inside the loop
+                                    newData[idx] = newData[idx] * (1-effect) + r_val * effect;
+                                    newData[idx+1] = newData[idx+1] * (1-effect) + g * effect;
+                                    newData[idx+2] = newData[idx+2] * (1-effect) + b * effect;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ctx.putImageData(newImgData, minX, minY);
+            }
+
+            window.lastX = localX;
+            window.lastY = localY;
         }
 
         ctx.restore();
@@ -1684,17 +2134,54 @@ function drawShapePreview() {
     ctx.lineWidth = 1 / zoomLevel;
     ctx.setLineDash([5 / zoomLevel, 5 / zoomLevel]);
 
-    if (currentTool === 'rect') {
-        ctx.strokeRect(startX, startY, x - startX, y - startY);
-    } else if (currentTool === 'circle') {
-        const radius = Math.sqrt(Math.pow(x - startX, 2) + Math.pow(y - startY, 2));
+    if (['rect', 'circle', 'line', 'rounded-rect', 'polygon', 'star'].includes(currentTool)) {
         ctx.beginPath();
-        ctx.arc(startX, startY, radius, 0, Math.PI * 2);
-        ctx.stroke();
-    } else if (currentTool === 'line') {
-        ctx.beginPath();
-        ctx.moveTo(startX, startY);
-        ctx.lineTo(x, y);
+        if (currentTool === 'rect') {
+            ctx.rect(startX, startY, x - startX, y - startY);
+        } else if (currentTool === 'circle') {
+            const radius = Math.sqrt(Math.pow(x - startX, 2) + Math.pow(y - startY, 2));
+            ctx.arc(startX, startY, radius, 0, Math.PI * 2);
+        } else if (currentTool === 'line') {
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(x, y);
+        } else if (currentTool === 'rounded-rect') {
+            const w = x - startX;
+            const h = y - startY;
+            const r = Math.min(shapeRadius, Math.abs(w)/2, Math.abs(h)/2);
+            ctx.moveTo(startX + r, startY);
+            ctx.lineTo(startX + w - r, startY);
+            ctx.quadraticCurveTo(startX + w, startY, startX + w, startY + r);
+            ctx.lineTo(startX + w, startY + h - r);
+            ctx.quadraticCurveTo(startX + w, startY + h, startX + w - r, startY + h);
+            ctx.lineTo(startX + r, startY + h);
+            ctx.quadraticCurveTo(startX, startY + h, startX, startY + h - r);
+            ctx.lineTo(startX, startY + r);
+            ctx.quadraticCurveTo(startX, startY, startX + r, startY);
+        } else if (currentTool === 'polygon' || currentTool === 'star') {
+            const cx = startX;
+            const cy = startY;
+            const outerRadius = Math.sqrt(Math.pow(x - startX, 2) + Math.pow(y - startY, 2));
+            const angleStep = Math.PI / shapeSides;
+            let angle = -Math.PI / 2;
+
+            if (currentTool === 'star') {
+                const innerRadius = outerRadius * 0.5;
+                ctx.moveTo(cx + Math.cos(angle) * outerRadius, cy + Math.sin(angle) * outerRadius);
+                for (let i = 0; i < shapeSides; i++) {
+                    angle += angleStep;
+                    ctx.lineTo(cx + Math.cos(angle) * innerRadius, cy + Math.sin(angle) * innerRadius);
+                    angle += angleStep;
+                    ctx.lineTo(cx + Math.cos(angle) * outerRadius, cy + Math.sin(angle) * outerRadius);
+                }
+            } else {
+                ctx.moveTo(cx + Math.cos(angle) * outerRadius, cy + Math.sin(angle) * outerRadius);
+                for (let i = 0; i < shapeSides; i++) {
+                    angle += angleStep * 2;
+                    ctx.lineTo(cx + Math.cos(angle) * outerRadius, cy + Math.sin(angle) * outerRadius);
+                }
+            }
+            ctx.closePath();
+        }
         ctx.stroke();
     } else if (currentTool === 'gradient') {
         // Draw gradient vector line
@@ -1769,7 +2256,49 @@ function handleCanvasClick(e) {
     }
 }
 
+function commitPenPath() {
+    const layer = layerManager.getActiveLayer();
+    if (!layer || penPath.length === 0) return;
+
+    layer.ctx.save();
+    layer.ctx.beginPath();
+
+    // Transform to local coordinates
+    for (let pt of penPath) {
+        const lx = pt.x - layer.x;
+        const ly = pt.y - layer.y;
+
+        if (pt.type === 'M') layer.ctx.moveTo(lx, ly);
+        else if (pt.type === 'L') layer.ctx.lineTo(lx, ly);
+        else if (pt.type === 'Q') layer.ctx.quadraticCurveTo(pt.cp1x - layer.x, pt.cp1y - layer.y, lx, ly);
+        else if (pt.type === 'C') layer.ctx.bezierCurveTo(pt.cp1x - layer.x, pt.cp1y - layer.y, pt.cp2x - layer.x, pt.cp2y - layer.y, lx, ly);
+    }
+
+    layer.ctx.closePath();
+
+    if (shapeFill) {
+        layer.ctx.fillStyle = brushColor;
+        layer.ctx.fill();
+    }
+    if (shapeStroke) {
+        layer.ctx.strokeStyle = brushColor;
+        layer.ctx.lineWidth = brushSize;
+        layer.ctx.stroke();
+    }
+
+    layer.ctx.restore();
+    historyManager.saveState();
+    renderCanvas();
+}
+
 function handleDoubleClick(e) {
+    if (currentTool === 'pen') {
+        commitPenPath();
+        penPath = [];
+        renderCanvas();
+        return;
+    }
+
     if (currentTool === 'poly-lasso') {
         // Close polygon selection
         if (polygonPoints.length < 3) {
@@ -2031,6 +2560,10 @@ function colorsMatch(c1, c2) {
 function setTool(tool) {
     currentTool = tool;
 
+    // Reset path states
+    if (tool !== 'pen') penPath = [];
+    if (tool !== 'poly-lasso') polygonPoints = [];
+
     document.querySelectorAll('.tool').forEach(el => el.classList.remove('active'));
     const map = {
         'brush': 0, 'eraser': 1, 'clone': 2, 'move': 3, 'fill': 4, 'gradient': 5, 'wand': 6, 'picker': 7, 'crop': 8,
@@ -2043,9 +2576,23 @@ function setTool(tool) {
     mainCanvas.style.cursor = getCursorForTool(tool);
 
     // Toggle Options
-    document.getElementById('shape-options').style.display = ['rect', 'circle'].includes(tool) ? 'flex' : 'none';
+    const isShape = ['rect', 'circle', 'rounded-rect', 'polygon', 'star', 'pen'].includes(tool);
+    document.getElementById('shape-options').style.display = isShape ? 'flex' : 'none';
     document.getElementById('text-options').style.display = tool === 'text' ? 'flex' : 'none';
     document.getElementById('wand-options').style.display = tool === 'wand' ? 'flex' : 'none';
+
+    const extraShapeOpts = document.getElementById('extra-shape-options');
+    if (['polygon', 'star', 'rounded-rect'].includes(tool)) {
+        extraShapeOpts.style.display = 'flex';
+        const isPolyStar = ['polygon', 'star'].includes(tool);
+        document.getElementById('sides-label').style.display = isPolyStar ? 'inline' : 'none';
+        document.getElementById('shape-sides').style.display = isPolyStar ? 'inline' : 'none';
+
+        document.getElementById('radius-label').style.display = tool === 'rounded-rect' ? 'inline' : 'none';
+        document.getElementById('shape-radius').style.display = tool === 'rounded-rect' ? 'inline' : 'none';
+    } else {
+        extraShapeOpts.style.display = 'none';
+    }
 
     // Reset Polygon Lasso state if switching away
     if (tool !== 'poly-lasso') {
@@ -2055,7 +2602,9 @@ function setTool(tool) {
 }
 
 function getCursorForTool(tool) {
-    if(tool === 'brush' || tool === 'eraser' || tool === 'clone') return 'crosshair';
+    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn'];
+    if(tool === 'brush' || tool === 'eraser' || tool === 'clone' || advancedBrushes.includes(tool)) return 'crosshair';
+    else if(tool === 'pen') return 'crosshair'; // Usually pen tool has custom cursor, but crosshair works
     else if(tool === 'move') return 'move';
     else if(tool === 'text') return 'text';
     else if(tool === 'picker') return 'cell';
@@ -2269,7 +2818,7 @@ function applyImageAdjustment(type) {
         return;
     }
 
-    const ctx = layer.ctx;
+    const ctx = layer.editingMask ? layer.maskCtx : layer.ctx;
     const w = layer.canvas.width;
     const h = layer.canvas.height;
 
@@ -2375,6 +2924,21 @@ function applyImageAdjustment(type) {
         const input = prompt("Enter Vignette Strength (0-100):", "50");
         if (input === null) return;
         val = parseInt(input) || 50;
+    } else if (type === 'levels') {
+        const input = prompt("Enter Midpoint adjustment (0.1 to 9.9):", "1.0");
+        if (input === null) return;
+        val = parseFloat(input) || 1.0;
+    } else if (type === 'color-balance') {
+        const inputR = prompt("Red Balance (-100 to 100):", "0");
+        const inputG = prompt("Green Balance (-100 to 100):", "0");
+        const inputB = prompt("Blue Balance (-100 to 100):", "0");
+        if (inputR === null || inputG === null || inputB === null) return;
+        val = { r: parseInt(inputR)||0, g: parseInt(inputG)||0, b: parseInt(inputB)||0 };
+    } else if (type === 'posterize') {
+        const input = prompt("Levels per channel (2-256):", "4");
+        if (input === null) return;
+        val = parseInt(input) || 4;
+        if (val < 2) val = 2;
     }
 
     // Process Pixels (Color Adjustments)
@@ -2402,13 +2966,26 @@ function applyImageAdjustment(type) {
             data[i+1] = Math.min(255, Math.max(0, data[i+1] + val));
             data[i+2] = Math.min(255, Math.max(0, data[i+2] + val));
         } else if (type === 'hue') {
-            // RGB to HSL, Shift H, HSL to RGB
-            // Simplified approximation for demo speed
-            // Proper impl needs RGB<->HSL conversion functions
             const [h, s, l] = rgbToHsl(data[i], data[i+1], data[i+2]);
             const newH = (h + val / 360) % 1;
             const [r, g, b] = hslToRgb(newH, s, l);
             data[i] = r; data[i+1] = g; data[i+2] = b;
+        } else if (type === 'levels') {
+             // Gamma correction formula: V_out = A * V_in ^ (1 / gamma)
+             // simplified: 255 * (val/255)^(1/gamma)
+             const gamma = val;
+             data[i] = 255 * Math.pow(data[i]/255, 1/gamma);
+             data[i+1] = 255 * Math.pow(data[i+1]/255, 1/gamma);
+             data[i+2] = 255 * Math.pow(data[i+2]/255, 1/gamma);
+        } else if (type === 'color-balance') {
+             data[i] = Math.min(255, Math.max(0, data[i] + val.r));
+             data[i+1] = Math.min(255, Math.max(0, data[i+1] + val.g));
+             data[i+2] = Math.min(255, Math.max(0, data[i+2] + val.b));
+        } else if (type === 'posterize') {
+             const step = 255 / (val - 1);
+             data[i] = Math.round(data[i] / step) * step;
+             data[i+1] = Math.round(data[i+1] / step) * step;
+             data[i+2] = Math.round(data[i+2] / step) * step;
         } else if (type === 'noise') {
             const rand = (Math.random() - 0.5) * val * 2;
             data[i] = Math.min(255, Math.max(0, data[i] + rand));
