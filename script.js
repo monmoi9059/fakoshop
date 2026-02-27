@@ -30,7 +30,9 @@ class LayerManager {
 
     addLayer(name = null) {
         this.layerCounter++;
-        const newName = name || `Layer ${this.layerCounter}`;
+        // Ensure unique name if auto-generated
+        let newName = name || `Layer ${this.layerCounter}`;
+
         const layer = new Layer(this.layerCounter, newName, this.width, this.height);
 
         // Add to top of stack
@@ -52,10 +54,15 @@ class LayerManager {
             return;
         }
         const index = this.layers.findIndex(l => l.id === this.activeLayerId);
+
+        // Prevent deleting if it's the only layer (redundant check but safe)
+        if (index === -1) return;
+
         this.layers.splice(index, 1);
 
-        // Set new active layer
-        this.activeLayerId = this.layers[Math.max(0, index - 1)].id;
+        // Set new active layer to the one below, or above if it was the bottom
+        const newIndex = Math.max(0, index - 1);
+        this.activeLayerId = this.layers[newIndex].id;
 
         renderLayerList();
         renderCanvas();
