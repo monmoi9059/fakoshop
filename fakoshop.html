@@ -287,6 +287,25 @@ button:hover { background-color: #5a5a5a; }
                 <input type="range" id="brush-opacity" min="1" max="100" value="100" style="width: 100px;">
                 <span id="brush-opacity-val">100%</span>
 
+                <span style="margin-left: 10px;">Hardness:</span>
+                <input type="range" id="brush-hardness" min="0" max="100" value="100" style="width: 100px;">
+                <span id="brush-hardness-val">100%</span>
+
+                <select id="brush-type" style="margin-left: 10px; padding: 2px;">
+                    <option value="round">Round</option>
+                    <option value="square">Square</option>
+                    <option value="calligraphy">Calligraphy</option>
+                </select>
+
+                <label style="margin-left: 10px; display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" id="airbrush-toggle"> Airbrush
+                </label>
+
+                <div id="shape-options" style="display: none; margin-left: 10px; align-items: center; gap: 10px;">
+                     <label><input type="checkbox" id="shape-fill" checked> Fill</label>
+                     <label><input type="checkbox" id="shape-stroke"> Stroke</label>
+                </div>
+
                 <span style="margin-left: auto;">Smoothing: 10%</span>
             </div>
 
@@ -745,11 +764,17 @@ const historyManager = new HistoryManager();
 const selectionManager = new SelectionManager(mainCanvas.width, mainCanvas.height);
 
 let painting = false;
+let airbrushInterval = null;
 let currentTool = 'brush';
 let brushSize = 10;
 let brushColor = '#000000';
 let secondaryColor = '#ffffff';
 let brushOpacity = 1;
+let brushHardness = 100;
+let brushType = 'round'; // round, square, calligraphy
+let isAirbrush = false;
+let shapeFill = true;
+let shapeStroke = false;
 let startX, startY; // For shape tools
 
 // Zoom & Pan Variables
@@ -958,6 +983,28 @@ document.getElementById('secondary-color').addEventListener('input', (e) => {
     secondaryColor = e.target.value;
 });
 
+// New UI Listeners
+document.getElementById('brush-hardness').addEventListener('input', (e) => {
+    brushHardness = parseInt(e.target.value);
+    document.getElementById('brush-hardness-val').innerText = brushHardness + '%';
+});
+
+document.getElementById('brush-type').addEventListener('change', (e) => {
+    brushType = e.target.value;
+});
+
+document.getElementById('airbrush-toggle').addEventListener('change', (e) => {
+    isAirbrush = e.target.checked;
+});
+
+document.getElementById('shape-fill').addEventListener('change', (e) => {
+    shapeFill = e.target.checked;
+});
+
+document.getElementById('shape-stroke').addEventListener('change', (e) => {
+    shapeStroke = e.target.checked;
+});
+
 // --- Coordinate Helper ---
 function getCanvasCoordinates(e) {
     const rect = mainCanvas.getBoundingClientRect();
@@ -987,6 +1034,10 @@ function startPosition(e) {
     const coords = getCanvasCoordinates(e);
     startX = coords.x;
     startY = coords.y;
+
+    // Store globally for Airbrush
+    window.lastMouseX = coords.x;
+    window.lastMouseY = coords.y;
 
     if (currentTool === 'move') {
         const layer = layerManager.getActiveLayer();
@@ -1054,12 +1105,28 @@ function startPosition(e) {
         }
     }
 
+    // Reset last position for brush interpolation
+    window.lastX = startX - (layerManager.getActiveLayer()?.x || 0);
+    window.lastY = startY - (layerManager.getActiveLayer()?.y || 0);
+
     if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone') {
-        draw(e);
+        if (isAirbrush && currentTool === 'brush') {
+            // Start Airbrush
+            clearInterval(airbrushInterval);
+            airbrushInterval = setInterval(() => {
+                if (painting) {
+                    drawAirbrush();
+                }
+            }, 50); // 20 times a second
+            drawAirbrush(); // Draw immediately too
+        } else {
+            draw(e);
+        }
     }
 }
 
 function endPosition(e) {
+    clearInterval(airbrushInterval);
     if (isPanning) {
         isPanning = false;
         mainCanvas.style.cursor = isSpacePressed ? 'grab' : getCursorForTool(currentTool);
@@ -1096,14 +1163,28 @@ function endPosition(e) {
 
              // Commit shapes
             if (currentTool === 'rect') {
-                layer.ctx.fillStyle = brushColor;
-                layer.ctx.fillRect(startX, startY, endX - startX, endY - startY);
+                if (shapeFill) {
+                    layer.ctx.fillStyle = brushColor;
+                    layer.ctx.fillRect(startX, startY, endX - startX, endY - startY);
+                }
+                if (shapeStroke) {
+                    layer.ctx.strokeStyle = brushColor;
+                    layer.ctx.lineWidth = brushSize;
+                    layer.ctx.strokeRect(startX, startY, endX - startX, endY - startY);
+                }
             } else if (currentTool === 'circle') {
                 const radius = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
-                layer.ctx.fillStyle = brushColor;
                 layer.ctx.beginPath();
                 layer.ctx.arc(startX, startY, radius, 0, Math.PI * 2);
-                layer.ctx.fill();
+                if (shapeFill) {
+                    layer.ctx.fillStyle = brushColor;
+                    layer.ctx.fill();
+                }
+                if (shapeStroke) {
+                    layer.ctx.strokeStyle = brushColor;
+                    layer.ctx.lineWidth = brushSize;
+                    layer.ctx.stroke();
+                }
             } else if (currentTool === 'line') {
                 layer.ctx.strokeStyle = brushColor;
                 layer.ctx.lineWidth = brushSize;
@@ -1169,6 +1250,54 @@ function endPosition(e) {
     }
 }
 
+function drawAirbrush() {
+    if (!painting) return;
+    const layer = layerManager.getActiveLayer();
+    if (!layer || !layer.visible) return;
+
+    // Use last known coordinates (window.lastMouseX/Y are global canvas coords, need local)
+    // Actually getCanvasCoordinates converts screen to global canvas space.
+    // We need to store global canvas space for airbrush to persist at spot.
+
+    // We can rely on window.lastMouseX/Y from draw() updates, but if mouse isn't moving, draw() isn't called.
+    // So we need `draw(e)` to update position even if airbrush.
+
+    const x = window.lastMouseX;
+    const y = window.lastMouseY;
+
+    if (x === undefined || y === undefined) return;
+
+    const ctx = layer.ctx;
+    ctx.save();
+
+    const localX = (x - layer.x);
+    const localY = (y - layer.y);
+
+    // Airbrush Effect: Random spray or soft accumulation?
+    // Usually soft accumulation for "Airbrush" in Photoshop (Flow).
+    // Or spray for Paint. Let's do Soft Accumulation (Flow).
+
+    const colorRgb = hexToRgb(brushColor);
+    const rad = brushSize / 2;
+
+    // Low opacity accumulation
+    // We use a radial gradient to stamp
+    const flow = 0.1; // 10% per tick
+
+    const grad = ctx.createRadialGradient(localX, localY, 0, localX, localY, rad);
+    grad.addColorStop(0, `rgba(${colorRgb}, ${flow * brushOpacity})`);
+    grad.addColorStop(1, `rgba(${colorRgb}, 0)`);
+
+    ctx.fillStyle = grad;
+    ctx.globalCompositeOperation = 'source-over'; // Accumulate
+    ctx.beginPath();
+    ctx.arc(localX, localY, rad, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+    renderCanvas();
+}
+
 function draw(e) {
     const coords = getCanvasCoordinates(e);
     const x = coords.x;
@@ -1213,7 +1342,16 @@ function draw(e) {
     }
 
     // Handle Brush/Eraser/Clone (Real-time)
-    if (currentTool === 'brush' || currentTool === 'clone') {
+    if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone') {
+
+        // If Airbrush is on, we just update coordinates for the interval loop and return
+        if (isAirbrush && currentTool === 'brush') {
+             // Update global tracking vars for the interval loop
+             window.lastMouseX = x;
+             window.lastMouseY = y;
+             return;
+        }
+
         const ctx = layer.ctx;
         ctx.save();
 
@@ -1320,37 +1458,98 @@ function draw(e) {
             // No stroke, we manually painted.
 
         } else {
-            // Normal Brush
-            ctx.lineWidth = brushSize;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.strokeStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
+            // Advanced Brush Logic
+            const isEraser = currentTool === 'eraser';
+            ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
+            const colorRgb = hexToRgb(brushColor); // For eraser this is ignored by destination-out usually, or we use black
 
-            ctx.lineTo(localX, localY);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(localX, localY);
+            if (brushType === 'square') {
+                // Square Brush (Axis Aligned)
+                ctx.fillStyle = `rgba(${colorRgb}, ${brushOpacity})`;
+
+                // Interpolation loop
+                const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
+                const steps = Math.ceil(dist); // 1 pixel step
+
+                for (let i = 0; i <= steps; i++) {
+                    const t = steps === 0 ? 0 : i / steps;
+                    const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
+                    const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
+
+                    // Draw centered square
+                    ctx.fillRect(cx - brushSize/2, cy - brushSize/2, brushSize, brushSize);
+                }
+
+            } else if (brushType === 'calligraphy') {
+                // Calligraphy Brush (Oval)
+                // Fixed angle oval.
+                // We must draw multiple ovals along the path.
+                const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
+                const angle = Math.atan2(localY - (window.lastY || localY), localX - (window.lastX || localX));
+
+                const steps = Math.ceil(dist); // 1 step per pixel
+
+                ctx.fillStyle = `rgba(${colorRgb}, ${brushOpacity})`;
+
+                for (let i = 0; i < steps; i++) {
+                    const t = i / steps;
+                    const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
+                    const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
+
+                    ctx.save();
+                    ctx.translate(cx, cy);
+                    ctx.rotate(-45 * Math.PI / 180); // Fixed 45 degree angle
+                    ctx.scale(1, 0.2); // Flatten to create calligraphy effect
+                    ctx.beginPath();
+                    ctx.arc(0, 0, brushSize / 2, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+
+            } else {
+                // Round Brush with Hardness
+                // If hardness is 100, use standard stroke.
+                // If hardness < 100, we need soft edges. Canvas API stroke doesn't support radial gradient brushes easily.
+                // We must use 'shadowBlur' or draw circles with gradients.
+
+                if (brushHardness >= 95) {
+                    ctx.lineWidth = brushSize;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.strokeStyle = `rgba(${colorRgb}, ${brushOpacity})`;
+                    ctx.lineTo(localX, localY);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(localX, localY);
+                } else {
+                    // Soft Brush (drawing repeated circles with gradient)
+                    const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
+                    const steps = Math.ceil(dist / (brushSize * 0.1)); // Optimization: step size based on brush size
+
+                    for (let i = 0; i <= steps; i++) {
+                        const t = i / Math.max(steps, 1);
+                        const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
+                        const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
+
+                        const rad = brushSize / 2;
+                        const grad = ctx.createRadialGradient(cx, cy, rad * (brushHardness/100), cx, cy, rad);
+                        grad.addColorStop(0, `rgba(${colorRgb}, ${brushOpacity})`);
+                        grad.addColorStop(1, `rgba(${colorRgb}, 0)`);
+
+                        ctx.fillStyle = grad;
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+
+            // Store last position specifically for brush interpolation
+            window.lastX = localX;
+            window.lastY = localY;
         }
 
         ctx.restore();
-        renderCanvas();
-    } else if (currentTool === 'eraser') {
-        const ctx = layer.ctx;
-        const localX = (x - layer.x);
-        const localY = (y - layer.y);
-
-        ctx.lineWidth = brushSize;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.globalCompositeOperation = 'destination-out';
-        ctx.strokeStyle = `rgba(0,0,0,1)`;
-
-        ctx.lineTo(localX, localY);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(localX, localY);
-        ctx.globalCompositeOperation = 'source-over';
         renderCanvas();
     } else {
         // For shapes, we just re-render to show the preview
@@ -1690,6 +1889,13 @@ function setTool(tool) {
     }
 
     mainCanvas.style.cursor = getCursorForTool(tool);
+
+    // Toggle Shape Options
+    if(['rect', 'circle'].includes(tool)) {
+        document.getElementById('shape-options').style.display = 'flex';
+    } else {
+        document.getElementById('shape-options').style.display = 'none';
+    }
 }
 
 function getCursorForTool(tool) {
