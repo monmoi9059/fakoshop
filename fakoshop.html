@@ -437,7 +437,9 @@ button:hover { background-color: #5a5a5a; }
                     <input type="number" id="wand-tolerance" value="30" min="0" max="255" style="width: 50px;">
                 </div>
 
-                <span style="margin-left: auto;">Smoothing: 10%</span>
+                                <span style="margin-left: auto;">Smoothing:</span>
+                <input type="range" id="brush-smoothing" min="0" max="100" value="10" style="width: 100px;">
+                <span id="brush-smoothing-val">10%</span>
             </div>
 
             <div id="canvas-area">
@@ -942,6 +944,8 @@ let brushColor = '#000000';
 let secondaryColor = '#ffffff';
 let brushOpacity = 1;
 let brushHardness = 100;
+let brushSmoothing = 10; // Smoothing factor (0-100)
+let smoothedX, smoothedY; // Tracking the smoothed brush tip
 let brushType = 'round'; // round, square, calligraphy
 let isAirbrush = false;
 let shapeFill = true;
@@ -1369,6 +1373,11 @@ document.getElementById('brush-hardness').addEventListener('input', (e) => {
     document.getElementById('brush-hardness-val').innerText = brushHardness + '%';
 });
 
+document.getElementById('brush-smoothing').addEventListener('input', (e) => {
+    brushSmoothing = parseInt(e.target.value);
+    document.getElementById('brush-smoothing-val').innerText = brushSmoothing + '%';
+});
+
 document.getElementById('brush-type').addEventListener('change', (e) => {
     brushType = e.target.value;
 });
@@ -1510,6 +1519,8 @@ function startPosition(e) {
     // Reset last position for brush interpolation
     window.lastX = startX - (layerManager.getActiveLayer()?.x || 0);
     window.lastY = startY - (layerManager.getActiveLayer()?.y || 0);
+    smoothedX = window.lastX;
+    smoothedY = window.lastY;
 
     // Handle Polygon Lasso - Preview line
     if (currentTool === 'poly-lasso' && polygonPoints.length > 0) {
@@ -1867,8 +1878,20 @@ function draw(e) {
         const ctx = layer.ctx;
         ctx.save();
 
-        const localX = (x - layer.x);
-        const localY = (y - layer.y);
+        const rawLocalX = (x - layer.x);
+        const rawLocalY = (y - layer.y);
+
+        // Calculate Smoothing Factor (0 to 1)
+        // 0% -> instant follow (factor 1)
+        // 100% -> very slow follow (factor ~0.05)
+        const sFactor = 1 - (brushSmoothing / 100) * 0.95;
+
+        // Apply LERP (Linear Interpolation)
+        smoothedX = smoothedX + (rawLocalX - smoothedX) * sFactor;
+        smoothedY = smoothedY + (rawLocalY - smoothedY) * sFactor;
+
+        const localX = smoothedX;
+        const localY = smoothedY;
 
         if (currentTool === 'clone') {
             if (cloneSourceX === null) return; // No source
@@ -2246,8 +2269,15 @@ function draw(e) {
             renderCanvas();
     } else if (currentTool === 'eraser') {
         const ctx = layer.ctx;
-        const localX = (x - layer.x);
-        const localY = (y - layer.y);
+        const rawLocalX = (x - layer.x);
+        const rawLocalY = (y - layer.y);
+
+        const sFactor = 1 - (brushSmoothing / 100) * 0.95;
+        smoothedX = smoothedX + (rawLocalX - smoothedX) * sFactor;
+        smoothedY = smoothedY + (rawLocalY - smoothedY) * sFactor;
+
+        const localX = smoothedX;
+        const localY = smoothedY;
 
         ctx.lineWidth = brushSize;
         ctx.lineCap = 'round';
