@@ -188,6 +188,89 @@ button:hover { background-color: #5a5a5a; }
 /* Utility classes */
 .hidden { display: none !important; }
 
+
+/* Quick Actions Panels */
+.action-btn {
+    text-align: left;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.action-btn::after {
+    content: '▼';
+    font-size: 8px;
+    transition: transform 0.2s;
+}
+.action-btn.open::after {
+    transform: rotate(180deg);
+}
+
+.action-sliders {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 10px;
+    background-color: #2b2b2b;
+    border: 1px solid #1e1e1e;
+    border-top: none;
+    font-size: 11px;
+}
+.action-sliders label {
+    color: #ccc;
+    margin-bottom: -2px;
+}
+
+/* Custom visual sliders */
+.visual-slider {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 12px;
+    border-radius: 6px;
+    outline: none;
+    margin: 5px 0 10px 0;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+}
+.visual-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #555;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+.visual-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #555;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
+/* Visual Tracks */
+.hue-slider {
+    background: linear-gradient(to right, #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%);
+}
+.saturation-slider {
+    background: linear-gradient(to right, #808080 0%, #0078d7 100%); /* Blue tint for saturation representation */
+}
+.brightness-slider {
+    background: linear-gradient(to right, #000000 0%, #ffffff 100%);
+}
+.contrast-slider {
+    background: linear-gradient(to right, #808080 0%, #000 50%, #fff 100%);
+}
+.blur-slider {
+    background: linear-gradient(to right, #555 0%, #aaa 100%);
+}
+.levels-slider {
+    background: linear-gradient(to right, #000 0%, #888 50%, #fff 100%);
+}
+
 /* Custom input styling for realism */
 .input-group { margin-bottom: 10px; }
 .input-label { display: block; margin-bottom: 5px; font-size: 11px; color: #aaa; }
@@ -370,9 +453,43 @@ button:hover { background-color: #5a5a5a; }
             </div>
 
             <div class="panel-header">Quick Actions</div>
-            <div class="panel-content">
-                <button onclick="applyImageAdjustment('brightness')">Brightness/Contrast</button>
-                <button onclick="applyImageAdjustment('hue')">Hue/Saturation</button>
+            <div class="panel-content" id="quick-actions-panel" style="display: flex; flex-direction: column; gap: 8px;">
+                <div class="action-group">
+                    <button class="action-btn" onclick="toggleActionGroup('brightness-group')">Brightness / Contrast</button>
+                    <div id="brightness-group" class="action-sliders hidden">
+                        <label>Brightness</label>
+                        <input type="range" class="visual-slider brightness-slider" id="slider-brightness" min="-100" max="100" value="0" oninput="previewAdjustment()" onchange="commitAdjustment()">
+                        <label>Contrast</label>
+                        <input type="range" class="visual-slider contrast-slider" id="slider-contrast" min="-100" max="100" value="0" oninput="previewAdjustment()" onchange="commitAdjustment()">
+                    </div>
+                </div>
+
+                <div class="action-group">
+                    <button class="action-btn" onclick="toggleActionGroup('hue-group')">Hue / Saturation</button>
+                    <div id="hue-group" class="action-sliders hidden">
+                        <label>Hue</label>
+                        <input type="range" class="visual-slider hue-slider" id="slider-hue" min="-180" max="180" value="0" oninput="previewAdjustment()" onchange="commitAdjustment()">
+                        <label>Saturation</label>
+                        <input type="range" class="visual-slider saturation-slider" id="slider-saturation" min="-100" max="100" value="0" oninput="previewAdjustment()" onchange="commitAdjustment()">
+                    </div>
+                </div>
+
+                <div class="action-group">
+                    <button class="action-btn" onclick="toggleActionGroup('blur-group')">Blur</button>
+                    <div id="blur-group" class="action-sliders hidden">
+                        <label>Radius</label>
+                        <input type="range" class="visual-slider blur-slider" id="slider-blur" min="0" max="20" value="0" step="0.5" oninput="previewAdjustment()" onchange="commitAdjustment()">
+                    </div>
+                </div>
+
+                <div class="action-group">
+                    <button class="action-btn" onclick="toggleActionGroup('levels-group')">Levels (Gamma)</button>
+                    <div id="levels-group" class="action-sliders hidden">
+                        <label>Midtones</label>
+                        <input type="range" class="visual-slider levels-slider" id="slider-levels" min="0.1" max="9.9" value="1.0" step="0.1" oninput="previewAdjustment()" onchange="commitAdjustment()">
+                    </div>
+                </div>
+
                 <button onclick="applyImageAdjustment('invert')">Invert</button>
                 <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
                 <input type="file" id="file-upload" style="display: none;" onchange="handleFileUpload(this)">
@@ -2836,6 +2953,209 @@ function loadProject(input) {
 }
 
 // --- Image Adjustments (Destructive) ---
+
+// --- Real-Time Adjustments State ---
+let isAdjusting = false;
+let adjustmentSourceCanvas = null;
+let currentActiveGroup = null;
+
+function toggleActionGroup(groupId) {
+    const group = document.getElementById(groupId);
+    const btn = group.previousElementSibling;
+
+    // If opening a new group, close others and reset adjustments
+    if (group.classList.contains('hidden')) {
+        // Reset all sliders back to default
+        document.querySelectorAll('.visual-slider').forEach(s => {
+            s.value = s.defaultValue;
+        });
+
+        // Hide all
+        document.querySelectorAll('.action-sliders').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('.action-btn').forEach(el => el.classList.remove('open'));
+
+        // Show target
+        group.classList.remove('hidden');
+        btn.classList.add('open');
+        currentActiveGroup = groupId;
+
+        // Capture original state for real-time preview
+        captureAdjustmentSource();
+    } else {
+        // Closing group
+        group.classList.add('hidden');
+        btn.classList.remove('open');
+        currentActiveGroup = null;
+        cancelAdjustment();
+    }
+}
+
+function captureAdjustmentSource() {
+    const layer = layerManager.getActiveLayer();
+    if (!layer || !layer.visible) return;
+
+    // Save original pixel data of the active layer for non-destructive preview
+    adjustmentSourceCanvas = document.createElement('canvas');
+    adjustmentSourceCanvas.width = layer.canvas.width;
+    adjustmentSourceCanvas.height = layer.canvas.height;
+    adjustmentSourceCanvas.getContext('2d').drawImage(layer.canvas, 0, 0);
+    isAdjusting = true;
+}
+
+function previewAdjustment() {
+    if (!isAdjusting || !adjustmentSourceCanvas) return;
+    const layer = layerManager.getActiveLayer();
+    if (!layer || !layer.visible) return;
+
+    // Restore from source canvas first
+    layer.ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
+    layer.ctx.drawImage(adjustmentSourceCanvas, 0, 0);
+
+    // Determine which sliders to read
+    if (currentActiveGroup === 'brightness-group') {
+        const brightness = parseInt(document.getElementById('slider-brightness').value);
+        const contrast = parseInt(document.getElementById('slider-contrast').value);
+        if (brightness !== 0 || contrast !== 0) {
+            applyRealtimeFilter(layer.ctx, w => applyBrightnessContrast(w, brightness, contrast));
+        }
+    } else if (currentActiveGroup === 'hue-group') {
+        const hue = parseInt(document.getElementById('slider-hue').value);
+        const sat = parseInt(document.getElementById('slider-saturation').value);
+        if (hue !== 0 || sat !== 0) {
+            applyRealtimeFilter(layer.ctx, w => applyHueSaturation(w, hue, sat));
+        }
+    } else if (currentActiveGroup === 'blur-group') {
+        const radius = parseFloat(document.getElementById('slider-blur').value);
+        if (radius > 0) {
+            layer.ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
+            layer.ctx.save();
+            if (selectionManager.hasSelection) selectionManager.clipContext(layer.ctx);
+            layer.ctx.filter = `blur(${radius}px)`;
+            layer.ctx.drawImage(adjustmentSourceCanvas, 0, 0);
+            layer.ctx.filter = 'none';
+            layer.ctx.restore();
+
+            // Re-draw unselected areas from source if there is a selection
+            if (selectionManager.hasSelection) {
+                layer.ctx.save();
+                layer.ctx.globalCompositeOperation = 'destination-over';
+                layer.ctx.drawImage(adjustmentSourceCanvas, 0, 0);
+                layer.ctx.restore();
+            }
+        }
+    }
+    } else if (currentActiveGroup === 'levels-group') {
+        const gamma = parseFloat(document.getElementById('slider-levels').value);
+        if (gamma !== 1.0) {
+            applyRealtimeFilter(layer.ctx, w => applyGamma(w, gamma));
+        }
+    }
+
+    renderCanvas();
+}
+
+function commitAdjustment() {
+    if (!isAdjusting) return;
+
+    // Save state to history after mouse release (change event)
+    historyManager.saveState();
+
+    // Update source canvas to the newly committed state
+    captureAdjustmentSource();
+
+    // Reset sliders so the next drag starts from 0 relative to the new baseline
+    document.querySelectorAll('.visual-slider').forEach(s => {
+         s.value = s.defaultValue;
+    });
+}
+
+function cancelAdjustment() {
+    if (!isAdjusting) return;
+    isAdjusting = false;
+
+    const layer = layerManager.getActiveLayer();
+    if (layer && adjustmentSourceCanvas) {
+         // Reset layer visually if we just closed without changing,
+         // Though change event handles commit. We keep the committed version.
+    }
+    adjustmentSourceCanvas = null;
+
+    // Reset sliders
+    document.querySelectorAll('.visual-slider').forEach(s => {
+         s.value = s.defaultValue;
+    });
+}
+
+function applyRealtimeFilter(ctx, filterFunc) {
+    const w = ctx.canvas.width;
+    const h = ctx.canvas.height;
+    const imgData = ctx.getImageData(0, 0, w, h);
+
+    let maskData = null;
+    if (selectionManager.hasSelection) {
+        maskData = selectionManager.ctx.getImageData(0, 0, w, h).data;
+    }
+
+    filterFunc({data: imgData.data, mask: maskData});
+    ctx.putImageData(imgData, 0, 0);
+}
+
+// Processing algorithms for real-time
+function applyBrightnessContrast(context, brightness, contrast) {
+    const data = context.data;
+    const mask = context.mask;
+    const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+
+    for (let i = 0; i < data.length; i += 4) {
+        if (mask && mask[i+3] === 0) continue;
+
+        for (let j = 0; j < 3; j++) {
+            let val = data[i+j] + brightness;
+            val = factor * (val - 128) + 128;
+            data[i+j] = Math.min(255, Math.max(0, val));
+        }
+    }
+}
+
+function applyHueSaturation(context, hueShift, satShift) {
+    const data = context.data;
+    const mask = context.mask;
+    const hueNormalized = hueShift / 360;
+    const satMultiplier = satShift > 0 ? (1 + satShift/100) : (1 + satShift/100); // simplify
+    // Actually standard saturation algorithm:
+    // S = S + satShift/100 is not great. Better:
+    // If satShift > 0: factor = 1 + (satShift/100)*2
+    // If satShift < 0: factor = 1 + (satShift/100)
+
+    for (let i = 0; i < data.length; i += 4) {
+        if (mask && mask[i+3] === 0) continue;
+
+        const [h, s, l] = rgbToHsl(data[i], data[i+1], data[i+2]);
+        let newH = (h + hueNormalized) % 1;
+        if (newH < 0) newH += 1;
+
+        let newS = s;
+        if (satShift > 0) newS = s + (1-s) * (satShift/100);
+        else newS = s + s * (satShift/100);
+        newS = Math.min(1, Math.max(0, newS));
+
+        const [r, g, b] = hslToRgb(newH, newS, l);
+        data[i] = r; data[i+1] = g; data[i+2] = b;
+    }
+}
+
+function applyGamma(context, gamma) {
+    const data = context.data;
+    const mask = context.mask;
+    for (let i = 0; i < data.length; i += 4) {
+        if (mask && mask[i+3] === 0) continue;
+        data[i] = 255 * Math.pow(data[i]/255, 1/gamma);
+        data[i+1] = 255 * Math.pow(data[i+1]/255, 1/gamma);
+        data[i+2] = 255 * Math.pow(data[i+2]/255, 1/gamma);
+    }
+}
+
+
 function applyImageAdjustment(type) {
     const layer = layerManager.getActiveLayer();
     if (!layer || !layer.visible) {
