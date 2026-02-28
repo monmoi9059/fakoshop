@@ -942,6 +942,7 @@ let currentTool = 'brush';
 let brushSize = 10;
 let brushColor = '#000000';
 let secondaryColor = '#ffffff';
+let activeColor = '#000000';
 let brushOpacity = 1;
 let brushHardness = 100;
 let brushSmoothing = 10; // Smoothing factor (0-100)
@@ -1334,6 +1335,8 @@ function renderLayerList() {
 
 // --- Event Listeners ---
 mainCanvas.addEventListener('mousedown', startPosition);
+// Prevent context menu on right click to allow drawing with secondary color
+mainCanvas.addEventListener('contextmenu', e => e.preventDefault());
 // Bind mouseup to window to ensure we catch it even if dragged outside canvas
 window.addEventListener('mouseup', endPosition);
 mainCanvas.addEventListener('mousemove', draw);
@@ -1433,6 +1436,9 @@ function startPosition(e) {
         return;
     }
 
+    // Determine active drawing color (Left click = Primary, Right click = Secondary)
+    activeColor = e.button === 2 ? secondaryColor : brushColor;
+
     const coords = getCanvasCoordinates(e);
     startX = coords.x;
     startY = coords.y;
@@ -1521,6 +1527,10 @@ function startPosition(e) {
     window.lastY = startY - (layerManager.getActiveLayer()?.y || 0);
     smoothedX = window.lastX;
     smoothedY = window.lastY;
+
+    // Store globally for shape previews
+    window.lastMouseX = startX;
+    window.lastMouseY = startY;
 
     // Handle Polygon Lasso - Preview line
     if (currentTool === 'poly-lasso' && polygonPoints.length > 0) {
@@ -1649,8 +1659,8 @@ function endPosition(e) {
              // Commit shapes
             if (['rect', 'circle', 'line', 'rounded-rect', 'polygon', 'star'].includes(currentTool)) {
                 layer.ctx.beginPath();
-                layer.ctx.fillStyle = brushColor;
-                layer.ctx.strokeStyle = brushColor;
+                layer.ctx.fillStyle = activeColor;
+                layer.ctx.strokeStyle = activeColor;
                 layer.ctx.lineWidth = brushSize;
                 layer.ctx.lineJoin = 'round';
 
@@ -1712,8 +1722,14 @@ function endPosition(e) {
             } else if (currentTool === 'gradient') {
                 // Apply Gradient
                 const grad = layer.ctx.createLinearGradient(startX, startY, endX, endY);
-                grad.addColorStop(0, brushColor);
-                grad.addColorStop(1, secondaryColor);
+                // If using secondary color, swap gradient direction
+                if (activeColor === secondaryColor) {
+                    grad.addColorStop(0, secondaryColor);
+                    grad.addColorStop(1, brushColor);
+                } else {
+                    grad.addColorStop(0, brushColor);
+                    grad.addColorStop(1, secondaryColor);
+                }
 
                 layer.ctx.fillStyle = grad;
 
@@ -1794,7 +1810,7 @@ function drawAirbrush() {
     // Usually soft accumulation for "Airbrush" in Photoshop (Flow).
     // Or spray for Paint. Let's do Soft Accumulation (Flow).
 
-    const colorRgb = hexToRgb(brushColor);
+    const colorRgb = hexToRgb(activeColor);
     const rad = brushSize / 2;
 
     // Low opacity accumulation
@@ -1875,9 +1891,6 @@ function draw(e) {
              return;
         }
 
-        const ctx = layer.ctx;
-        ctx.save();
-
         const rawLocalX = (x - layer.x);
         const rawLocalY = (y - layer.y);
 
@@ -1893,210 +1906,26 @@ function draw(e) {
         const localX = smoothedX;
         const localY = smoothedY;
 
+        const ctx = layer.ctx;
+        ctx.save();
+
         if (currentTool === 'clone') {
             if (cloneSourceX === null) return; // No source
 
-            // Clone logic:
-            // Calculate offset from start position to current position
-            // But wait, standard clone stamp works by fixed offset.
-            // Offset = (currentX - startX) + (cloneSourceX - startX_of_stroke?) NO
-            // Standard: Offset between source and destination is constant during stroke.
-            // Offset = (x - cloneSourceX) - wait.
-            // When we start stroke at startX, startY... we sample from cloneSourceX, cloneSourceY.
-            // diffX = cloneSourceX - startX
-            // diffY = cloneSourceY - startY
-            // sourceForPixel(x,y) = (x + diffX, y + diffY)
-
-            // However, implementing that with `ctx.lineTo` path stroke is hard because we need to texture map.
-            // Canvas Pattern?
-            // Yes, we can create a pattern from the visible canvas (or specific layer?) usually visible canvas.
-            // And offset the pattern matrix.
-
-            // For simplicity in this engine: Point-based drawing (stamps) for clone tool?
-            // Or efficient way:
-            // Draw using the image as a pattern.
-
-            // Let's assume we clone from the "Composite Image" (what you see).
-            // We need a snapshot of the canvas before the stroke started? Ideally yes.
-            // For now, let's grab the composite from mainCanvas? But mainCanvas has zoom.
-            // We need a flat composite.
-
-            // Doing it properly:
-            // 1. On `startPosition`, grab composite of all layers (flattened).
-            // 2. Create Pattern from it.
-            // 3. Set ctx.strokeStyle = pattern.
-            // 4. Translate pattern to match offset.
-
-            // Let's implement simplified "Stamp" drawing for clone to avoid complex pattern matrix updates per frame if we used lineTo.
-            // Actually, we can just stroke.
-
-            // We need a cached source image.
-            if (!window.cloneSourceImage) return;
-
-            const diffX = cloneSourceX - startX;
-            const diffY = cloneSourceY - startY;
-
-            // We need to set the pattern transform.
-            const pattern = ctx.createPattern(window.cloneSourceImage, 'no-repeat');
-            // The pattern needs to be shifted so that at (x,y) we see pixel at (x+diffX, y+diffY).
-            // Default pattern starts at 0,0 of destination.
-            // We want pixel at 0,0 of dest to correspond to diffX, diffY of source.
-            // So translate pattern by (diffX - layer.x, diffY - layer.y) because we draw in local layer space.
-
-            // Wait, logic:
-            // Source pixel (sx, sy) = (x + diffX, y + diffY)
-            // Pattern draws image at 0,0.
-            // We want image to be shifted so that the part at sx,sy appears at x,y.
-            // If we translate pattern by (dx, dy), then pixel at 0,0 takes value from image at -dx, -dy?
-            // Canvas pattern matrix logic is tricky.
-
-            // Alternative: clip to a small circle at x,y, draw image shifted.
             ctx.save();
             ctx.beginPath();
             ctx.arc(localX, localY, brushSize/2, 0, Math.PI*2);
             ctx.clip();
-            // Draw image shifted
-            // We want to draw the source image such that (sourceX) ends up at (startX)
-            // Shift = startX - cloneSourceX
-            // Local shift = (startX - layer.x) - cloneSourceX ??
-
-            // Let's simply draw the image:
-            // dest point: localX, localY
-            // source point: x + diffX, y + diffY  (Global coords)
-            // source point: (localX + layer.x) + diffX...
-
-            // We draw the full image at offset:
-            // offsetX = localX - (x + diffX) = -diffX - layer.x
-            // offsetY = -diffY - layer.y
-
-            // Actually, just:
-            // sourceX should correspond to startX.
-            // So if we draw image at (startX - cloneSourceX) relative to global?
-            // Draw image at (diffX, diffY)? No.
-
-            // Fixed offset logic:
-            // diffX = cloneSourceX - startX.
-            // When we are at startX, we want cloneSourceX.
-            // If we draw image at (startX - cloneSourceX, startY - cloneSourceY)...
-            // image pixel at (cloneSourceX) will be at (startX - cloneSourceX + cloneSourceX) = startX. Correct.
-
-            // Convert to local layer space:
-            // drawImage(img, (startX - cloneSourceX) - layer.x, (startY - cloneSourceY) - layer.y);
-
-            // But this draws the whole image every mouse move. Performance heavy?
-            // Yes. But clipping restricts it.
-
             ctx.translate(startX - cloneSourceX - layer.x, startY - cloneSourceY - layer.y);
             ctx.drawImage(window.cloneSourceImage, 0, 0);
 
             ctx.restore();
             // No stroke, we manually painted.
 
-        } else {
-            // Advanced Brush Logic
-            const isEraser = currentTool === 'eraser';
-            ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
-            const colorRgb = hexToRgb(brushColor); // For eraser this is ignored by destination-out usually, or we use black
-
-            if (brushType === 'square') {
-                // Square Brush (Axis Aligned)
-                ctx.fillStyle = `rgba(${colorRgb}, ${brushOpacity})`;
-
-                // Interpolation loop
-                const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
-                const steps = Math.ceil(dist); // 1 pixel step
-
-                for (let i = 0; i <= steps; i++) {
-                    const t = steps === 0 ? 0 : i / steps;
-                    const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
-                    const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
-
-                    // Draw centered square
-                    ctx.fillRect(cx - brushSize/2, cy - brushSize/2, brushSize, brushSize);
-                }
-
-            } else if (brushType === 'calligraphy') {
-                // Calligraphy Brush (Oval)
-                // Fixed angle oval.
-                // We must draw multiple ovals along the path.
-                const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
-                const angle = Math.atan2(localY - (window.lastY || localY), localX - (window.lastX || localX));
-
-                const steps = Math.ceil(dist); // 1 step per pixel
-
-                ctx.fillStyle = `rgba(${colorRgb}, ${brushOpacity})`;
-
-                for (let i = 0; i < steps; i++) {
-                    const t = i / steps;
-                    const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
-                    const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
-
-                    ctx.save();
-                    ctx.translate(cx, cy);
-                    ctx.rotate(-45 * Math.PI / 180); // Fixed 45 degree angle
-                    ctx.scale(1, 0.2); // Flatten to create calligraphy effect
-                    ctx.beginPath();
-                    ctx.arc(0, 0, brushSize / 2, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.restore();
-                }
-
-            } else {
-                // Round Brush with Hardness
-                // If hardness is 100, use standard stroke.
-                // If hardness < 100, we need soft edges. Canvas API stroke doesn't support radial gradient brushes easily.
-                // We must use 'shadowBlur' or draw circles with gradients.
-
-                if (brushHardness >= 95) {
-                    ctx.lineWidth = brushSize;
-                    ctx.lineCap = 'round';
-                    ctx.lineJoin = 'round';
-                    ctx.strokeStyle = `rgba(${colorRgb}, ${brushOpacity})`;
-                    ctx.lineTo(localX, localY);
-                    ctx.stroke();
-                    ctx.beginPath();
-                    ctx.moveTo(localX, localY);
-                } else {
-                    // Soft Brush (drawing repeated circles with gradient)
-                    const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
-                    const steps = Math.ceil(dist / (brushSize * 0.1)); // Optimization: step size based on brush size
-
-                    for (let i = 0; i <= steps; i++) {
-                        const t = i / Math.max(steps, 1);
-                        const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
-                        const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
-
-                        const rad = brushSize / 2;
-                        const grad = ctx.createRadialGradient(cx, cy, rad * (brushHardness/100), cx, cy, rad);
-                        grad.addColorStop(0, `rgba(${colorRgb}, ${brushOpacity})`);
-                        grad.addColorStop(1, `rgba(${colorRgb}, 0)`);
-
-                        ctx.fillStyle = grad;
-                        ctx.beginPath();
-                        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-                        ctx.fill();
-                    }
-                }
-            }
-
-            // Store last position specifically for brush interpolation
-            window.lastX = localX;
-            window.lastY = localY;
-        }
-
-        ctx.restore();
-        renderCanvas();
-
-    } else if (advancedBrushes.includes(currentTool)) {
-        const ctx = layer.editingMask ? layer.maskCtx : layer.ctx;
-        ctx.save();
-
-        // Advanced Brushes (Smudge, Blur, Sharpen, Dodge, Burn)
-            // Need to read pixels around the brush, process them, and write back.
+        } else if (advancedBrushes.includes(currentTool)) {
+            // Advanced Brushes (Smudge, Blur, Sharpen, Dodge, Burn)
             const r = Math.ceil(brushSize / 2);
 
-            // For smudge, we might need to sample from further back if moving fast.
-            // Calculate a combined bounding box that includes the previous position
             let sampleMinX = Math.floor(localX - r);
             let sampleMinY = Math.floor(localY - r);
             let sampleMaxX = Math.ceil(localX + r);
@@ -2262,34 +2091,108 @@ function draw(e) {
                 ctx.putImageData(newImgData, minX, minY);
             }
 
-            window.lastX = localX;
-            window.lastY = localY;
+        } else if (currentTool === 'eraser') {
+            ctx.lineWidth = brushSize;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.strokeStyle = `rgba(0,0,0,1)`;
 
-            ctx.restore();
-            renderCanvas();
-    } else if (currentTool === 'eraser') {
-        const ctx = layer.ctx;
-        const rawLocalX = (x - layer.x);
-        const rawLocalY = (y - layer.y);
+            ctx.lineTo(localX, localY);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(localX, localY);
+            ctx.globalCompositeOperation = 'source-over';
+        } else {
+            // Normal Brush Logic
+            const colorRgb = hexToRgb(activeColor);
 
-        const sFactor = 1 - (brushSmoothing / 100) * 0.95;
-        smoothedX = smoothedX + (rawLocalX - smoothedX) * sFactor;
-        smoothedY = smoothedY + (rawLocalY - smoothedY) * sFactor;
+            if (brushType === 'square') {
+                // Square Brush (Axis Aligned)
+                ctx.fillStyle = `rgba(${colorRgb}, ${brushOpacity})`;
 
-        const localX = smoothedX;
-        const localY = smoothedY;
+                // Interpolation loop
+                const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
+                const steps = Math.ceil(dist); // 1 pixel step
 
-        ctx.lineWidth = brushSize;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.globalCompositeOperation = 'destination-out';
-        ctx.strokeStyle = `rgba(0,0,0,1)`;
+                for (let i = 0; i <= steps; i++) {
+                    const t = steps === 0 ? 0 : i / steps;
+                    const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
+                    const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
 
-        ctx.lineTo(localX, localY);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(localX, localY);
-        ctx.globalCompositeOperation = 'source-over';
+                    // Draw centered square
+                    ctx.fillRect(cx - brushSize/2, cy - brushSize/2, brushSize, brushSize);
+                }
+
+            } else if (brushType === 'calligraphy') {
+                // Calligraphy Brush (Oval)
+                // Fixed angle oval.
+                // We must draw multiple ovals along the path.
+                const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
+                const angle = Math.atan2(localY - (window.lastY || localY), localX - (window.lastX || localX));
+
+                const steps = Math.ceil(dist); // 1 step per pixel
+
+                ctx.fillStyle = `rgba(${colorRgb}, ${brushOpacity})`;
+
+                for (let i = 0; i < steps; i++) {
+                    const t = i / steps;
+                    const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
+                    const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
+
+                    ctx.save();
+                    ctx.translate(cx, cy);
+                    ctx.rotate(-45 * Math.PI / 180); // Fixed 45 degree angle
+                    ctx.scale(1, 0.2); // Flatten to create calligraphy effect
+                    ctx.beginPath();
+                    ctx.arc(0, 0, brushSize / 2, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+
+            } else {
+                // Round Brush with Hardness
+                // If hardness is 100, use standard stroke.
+                // If hardness < 100, we need soft edges. Canvas API stroke doesn't support radial gradient brushes easily.
+                // We must use 'shadowBlur' or draw circles with gradients.
+
+                if (brushHardness >= 95) {
+                    ctx.lineWidth = brushSize;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.strokeStyle = `rgba(${colorRgb}, ${brushOpacity})`;
+                    ctx.lineTo(localX, localY);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(localX, localY);
+                } else {
+                    // Soft Brush (drawing repeated circles with gradient)
+                    const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
+                    const steps = Math.ceil(dist / (brushSize * 0.1)); // Optimization: step size based on brush size
+
+                    for (let i = 0; i <= steps; i++) {
+                        const t = i / Math.max(steps, 1);
+                        const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
+                        const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
+
+                        const rad = brushSize / 2;
+                        const grad = ctx.createRadialGradient(cx, cy, rad * (brushHardness/100), cx, cy, rad);
+                        grad.addColorStop(0, `rgba(${colorRgb}, ${brushOpacity})`);
+                        grad.addColorStop(1, `rgba(${colorRgb}, 0)`);
+
+                        ctx.fillStyle = grad;
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+        }
+
+        window.lastX = localX;
+        window.lastY = localY;
+
+        ctx.restore();
         renderCanvas();
     } else {
         // For shapes, we just re-render to show the preview
@@ -2387,6 +2290,9 @@ function handleCanvasClick(e) {
     const localX = x - layer.x;
     const localY = y - layer.y;
 
+    // Determine active drawing color
+    activeColor = e.button === 2 ? secondaryColor : brushColor;
+
     if (currentTool === 'fill') {
         if (selectionManager.hasSelection) {
             // Selection mask is global, so we use global x,y for mask check
@@ -2394,7 +2300,7 @@ function handleCanvasClick(e) {
             if (maskPixel[3] === 0) return;
         }
 
-        floodFill(layer, Math.floor(localX), Math.floor(localY), hexToRgba(brushColor));
+        floodFill(layer, Math.floor(localX), Math.floor(localY), hexToRgba(activeColor));
         historyManager.saveState();
         renderCanvas();
     } else if (currentTool === 'wand') {
@@ -2416,7 +2322,7 @@ function handleCanvasClick(e) {
             fontStr += `${brushSize * 2}px ${fontFamily}`;
 
             layer.ctx.font = fontStr;
-            layer.ctx.fillStyle = brushColor;
+            layer.ctx.fillStyle = activeColor;
             layer.ctx.fillText(text, localX, localY);
             historyManager.saveState();
             renderCanvas();
@@ -2450,11 +2356,11 @@ function commitPenPath() {
     layer.ctx.closePath();
 
     if (shapeFill) {
-        layer.ctx.fillStyle = brushColor;
+        layer.ctx.fillStyle = activeColor;
         layer.ctx.fill();
     }
     if (shapeStroke) {
-        layer.ctx.strokeStyle = brushColor;
+        layer.ctx.strokeStyle = activeColor;
         layer.ctx.lineWidth = brushSize;
         layer.ctx.stroke();
     }
