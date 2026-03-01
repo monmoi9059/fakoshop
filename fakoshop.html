@@ -925,6 +925,8 @@ class SelectionManager {
 
     updateSelection(x, y) {
         if (!this.hasSelection) return;
+        this.lastX = x;
+        this.lastY = y;
 
         if (currentTool === 'marquee' || currentTool === 'crop') {
             this.ctx.clearRect(0, 0, this.width, this.height);
@@ -955,12 +957,36 @@ class SelectionManager {
     }
 
     // Apply clipping to a context based on selection
-    clipContext(ctx) {
+    clipContext(ctx, inverse = false, layerX = 0, layerY = 0) {
         if (!this.hasSelection) return;
         ctx.globalCompositeOperation = 'destination-in';
-        ctx.drawImage(this.maskCanvas, 0, 0);
+        ctx.drawImage(this.maskCanvas, -layerX, -layerY);
         ctx.globalCompositeOperation = 'source-over';
     }
+    applyClip(ctx, layerX = 0, layerY = 0) {
+        if (!this.hasSelection) return;
+        ctx.beginPath();
+        if (currentTool === 'marquee' || currentTool === 'crop') {
+            const w = (this.lastX || this.startX) - this.startX;
+            const h = (this.lastY || this.startY) - this.startY;
+            ctx.rect(this.startX - layerX, this.startY - layerY, w, h);
+        } else if (currentTool === 'lasso' && this.currentPath.length > 0) {
+            ctx.moveTo(this.currentPath[0][0] - layerX, this.currentPath[0][1] - layerY);
+            for (let i = 1; i < this.currentPath.length; i++) {
+                ctx.lineTo(this.currentPath[i][0] - layerX, this.currentPath[i][1] - layerY);
+            }
+            ctx.closePath();
+        } else if (currentTool === 'wand') {
+            // Wand is a raster mask, we CANNOT use `ctx.clip()` with paths.
+            // Oh right, wand selection creates raster pixels, not paths.
+            // In that case, we must use `globalCompositeOperation = 'destination-in'` with the maskCanvas.
+        }
+
+        if (currentTool !== 'wand') {
+             ctx.clip();
+        }
+    }
+
 }
 
 // --- Core Variables ---
@@ -1938,6 +1964,16 @@ function draw(e, isContinuousMock = false) {
     // Handle Brush/Eraser/Clone/Advanced Brushes (Real-time)
     const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn', 'spray', 'watercolor', 'marker', 'pencil'];
     if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone' || advancedBrushes.includes(currentTool)) {
+        const layer = layerManager.getActiveLayer();
+        if(layer && selectionManager.hasSelection) {
+            if (!window.selectionSnapshotCanvas) {
+                window.selectionSnapshotCanvas = document.createElement('canvas');
+            }
+            window.selectionSnapshotCanvas.width = layer.canvas.width;
+            window.selectionSnapshotCanvas.height = layer.canvas.height;
+            window.selectionSnapshotCanvas.getContext('2d').clearRect(0, 0, layer.canvas.width, layer.canvas.height);
+            window.selectionSnapshotCanvas.getContext('2d').drawImage(layer.canvas, 0, 0);
+        }
 
         // If Airbrush is on, we just update coordinates for the interval loop and return
         if (isAirbrush && currentTool === 'brush') {
@@ -2356,6 +2392,58 @@ function draw(e, isContinuousMock = false) {
             }
         }
 
+        if (selectionManager.hasSelection && window.selectionSnapshotCanvas) {
+            // Restore unselected pixels from snapshot
+            // We only need to process the bounding box of the stroke segment to be fast
+            const r = Math.ceil(brushSize / 2);
+
+            // localX/Y are the CURRENT point. window.lastX/Y are the PREVIOUS point.
+            const lx = window.lastX !== undefined ? window.lastX : localX;
+            const ly = window.lastY !== undefined ? window.lastY : localY;
+
+            const minX = Math.max(0, Math.floor(Math.min(localX - r, lx - r)));
+            const minY = Math.max(0, Math.floor(Math.min(localY - r, ly - r)));
+            const maxX = Math.min(layer.canvas.width, Math.ceil(Math.max(localX + r, lx + r)));
+            const maxY = Math.min(layer.canvas.height, Math.ceil(Math.max(localY + r, ly + r)));
+            const bw = maxX - minX;
+            const bh = maxY - minY;
+
+            if (bw > 0 && bh > 0) {
+                const layerData = ctx.getImageData(minX, minY, bw, bh);
+                const snapData = window.selectionSnapshotCanvas.getContext('2d').getImageData(minX, minY, bw, bh);
+
+                // Get mask data for the bounding box.
+                // Mask coordinates are global, so add layer.x/layer.y.
+                // layer.x/layer.y might be undefined or 0.
+                const gx = minX + (layer.x || 0);
+                const gy = minY + (layer.y || 0);
+
+                let m = null;
+                // If the bounding box is entirely within the main canvas:
+                if (gx >= 0 && gy >= 0 && gx + bw <= selectionManager.width && gy + bh <= selectionManager.height) {
+                    m = selectionManager.ctx.getImageData(gx, gy, bw, bh).data;
+                } else {
+                    // It goes out of bounds. The canvas API handles out of bounds by filling with 0 alpha transparent black.
+                    m = selectionManager.ctx.getImageData(gx, gy, bw, bh).data;
+                }
+
+                const d = layerData.data;
+                const s = snapData.data;
+
+                for (let i = 0; i < d.length; i += 4) {
+                    // selectionManager draws solid black for SELECTED pixels.
+                    // So m[i+3] === 0 means UNSELECTED.
+                    if (m[i+3] === 0) {
+                        d[i] = s[i];
+                        d[i+1] = s[i+1];
+                        d[i+2] = s[i+2];
+                        d[i+3] = s[i+3];
+                    }
+                }
+                ctx.putImageData(layerData, minX, minY);
+            }
+        }
+
         window.lastX = localX;
         window.lastY = localY;
 
@@ -2750,7 +2838,7 @@ function floodFill(layer, startX, startY, fillColor) {
     // Get selection mask data if active
     let maskData = null;
     if (selectionManager.hasSelection) {
-        maskData = selectionManager.ctx.getImageData(0, 0, w, h).data;
+        maskData = selectionManager.ctx.getImageData(layer.x || 0, layer.y || 0, w, h).data;
     }
 
     const startPos = (startY * w + startX) * 4;
@@ -2767,20 +2855,7 @@ function floodFill(layer, startX, startY, fillColor) {
 
         if (x < 0 || x >= w || y < 0 || y >= h) continue;
 
-        // Check selection mask
-        // Note: Mask is global. StartX/Y are local to layer.
-        // We need to check mask at (x + layer.x, y + layer.y)
-        if (maskData) {
-            const globalX = x + layer.x;
-            const globalY = y + layer.y;
-            // Check bounds of mask
-            if(globalX >= 0 && globalX < selectionManager.width && globalY >= 0 && globalY < selectionManager.height) {
-                 const maskPos = (globalY * selectionManager.width + globalX) * 4;
-                 if (maskData[maskPos + 3] === 0) continue;
-            } else {
-                continue; // Outside global mask area implies outside selection usually? Or unselected?
-            }
-        }
+        if (maskData && maskData[pos + 3] === 0) continue;
 
         if (colorsMatch([data[pos], data[pos+1], data[pos+2], data[pos+3]], startColor)) {
             data[pos] = fillColor[0];
