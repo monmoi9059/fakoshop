@@ -1579,15 +1579,25 @@ function startPosition(e) {
 
     const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn', 'spray', 'watercolor', 'marker', 'pencil'];
     if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone' || advancedBrushes.includes(currentTool)) {
-        if (isAirbrush && currentTool === 'brush') {
-            // Start Airbrush
+const isContinuous = (isAirbrush && currentTool === 'brush') || currentTool === 'spray';
+
+        if (isContinuous) {
             clearInterval(airbrushInterval);
             airbrushInterval = setInterval(() => {
                 if (painting) {
-                    drawAirbrush();
+                    if (currentTool === 'spray') {
+                        draw(null, true); // Mock continuous spray
+                    } else {
+                        drawAirbrush();
+                    }
                 }
             }, 50); // 20 times a second
-            drawAirbrush(); // Draw immediately too
+
+            if (currentTool === 'spray') {
+                draw(e);
+            } else {
+                drawAirbrush();
+            }
         } else {
             draw(e);
         }
@@ -1870,26 +1880,33 @@ function drawAirbrush() {
     renderCanvas();
 }
 
-function draw(e) {
-    const coords = getCanvasCoordinates(e);
-    const x = coords.x;
-    const y = coords.y;
+function draw(e, isContinuousMock = false) {
+    let x, y;
+    if (isContinuousMock) {
+        x = window.lastMouseX;
+        y = window.lastMouseY;
+        if (x === undefined || y === undefined) return;
+    } else {
+        const coords = getCanvasCoordinates(e);
+        x = coords.x;
+        y = coords.y;
 
-    // Handle Panning
-    if (isPanning) {
-        const dx = coords.screenX - lastPanX;
-        const dy = coords.screenY - lastPanY;
-        panX += dx;
-        panY += dy;
-        lastPanX = coords.screenX;
-        lastPanY = coords.screenY;
-        renderCanvas();
-        return;
+        // Handle Panning
+        if (isPanning) {
+            const dx = coords.screenX - lastPanX;
+            const dy = coords.screenY - lastPanY;
+            panX += dx;
+            panY += dy;
+            lastPanX = coords.screenX;
+            lastPanY = coords.screenY;
+            renderCanvas();
+            return;
+        }
+
+        // Update coordinates for preview
+        window.lastMouseX = x;
+        window.lastMouseY = y;
     }
-
-    // Update coordinates for preview
-    window.lastMouseX = x;
-    window.lastMouseY = y;
 
     if (currentTool === 'pen' && isDraggingPen) {
         renderCanvas();
