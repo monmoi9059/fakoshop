@@ -963,29 +963,6 @@ class SelectionManager {
         ctx.drawImage(this.maskCanvas, -layerX, -layerY);
         ctx.globalCompositeOperation = 'source-over';
     }
-    applyClip(ctx, layerX = 0, layerY = 0) {
-        if (!this.hasSelection) return;
-        ctx.beginPath();
-        if (currentTool === 'marquee' || currentTool === 'crop') {
-            const w = (this.lastX || this.startX) - this.startX;
-            const h = (this.lastY || this.startY) - this.startY;
-            ctx.rect(this.startX - layerX, this.startY - layerY, w, h);
-        } else if (currentTool === 'lasso' && this.currentPath.length > 0) {
-            ctx.moveTo(this.currentPath[0][0] - layerX, this.currentPath[0][1] - layerY);
-            for (let i = 1; i < this.currentPath.length; i++) {
-                ctx.lineTo(this.currentPath[i][0] - layerX, this.currentPath[i][1] - layerY);
-            }
-            ctx.closePath();
-        } else if (currentTool === 'wand') {
-            // Wand is a raster mask, we CANNOT use `ctx.clip()` with paths.
-            // Oh right, wand selection creates raster pixels, not paths.
-            // In that case, we must use `globalCompositeOperation = 'destination-in'` with the maskCanvas.
-        }
-
-        if (currentTool !== 'wand') {
-             ctx.clip();
-        }
-    }
 
 }
 
@@ -2014,7 +1991,7 @@ function draw(e, isContinuousMock = false) {
             ctx.restore();
             // No stroke, we manually painted.
 
-        } else if (advancedBrushes.includes(currentTool)) {
+        } else if (['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn'].includes(currentTool)) {
             // Advanced Brushes (Smudge, Blur, Sharpen, Dodge, Burn)
             const r = Math.ceil(brushSize / 2);
 
