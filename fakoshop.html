@@ -275,6 +275,11 @@ button:hover { background-color: #5a5a5a; }
 .input-group { margin-bottom: 10px; }
 .input-label { display: block; margin-bottom: 5px; font-size: 11px; color: #aaa; }
 
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
 </style>
 </head>
 <body>
@@ -347,6 +352,11 @@ button:hover { background-color: #5a5a5a; }
 
         <div id="toolbar">
             <div class="tool active" title="Brush Tool (B)" onclick="setTool('brush')">🖌️</div>
+            <div class="tool" title="Spray Can" onclick="setTool('spray')">💨</div>
+            <div class="tool" title="Watercolor" onclick="setTool('watercolor')">🖌️</div>
+            <div class="tool" title="Marker" onclick="setTool('marker')">🖍️</div>
+            <div class="tool" title="Pencil" onclick="setTool('pencil')">✏️</div>
+
             <div class="tool" title="Eraser Tool (E)" onclick="setTool('eraser')">🧼</div>
             <div class="tool" title="Clone Stamp (S)" onclick="setTool('clone')">©</div>
             <div class="tool" title="Smudge Tool" onclick="setTool('smudge')">👆</div>
@@ -437,9 +447,33 @@ button:hover { background-color: #5a5a5a; }
                     <input type="number" id="wand-tolerance" value="30" min="0" max="255" style="width: 50px;">
                 </div>
 
+                <div id="spray-options" style="display: none; margin-left: 10px; align-items: center; gap: 5px;">
+                    <select id="spray-type" style="padding: 2px;">
+                        <option value="scatter">Scattered Dots</option>
+                        <option value="soft">Soft Radial</option>
+                        <option value="wide">Wide Nozzle</option>
+                        <option value="thin">Thin Nozzle</option>
+                    </select>
+                </div>
+
+
                                 <span style="margin-left: auto;">Smoothing:</span>
                 <input type="range" id="brush-smoothing" min="0" max="100" value="10" style="width: 100px;">
                 <span id="brush-smoothing-val">10%</span>
+            </div>
+
+            <div id="ai-tools-bar" style="height: 35px; background-color: var(--bg-panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 15px; gap: 10px; font-size: 11px;">
+                <span style="color: #a0a0ff; font-weight: bold; margin-right: 5px;">✨ AI Tools:</span>
+                <button onclick="aiSimulate('fill')" style="width: auto; margin: 0; padding: 3px 8px;" title="Fills selection with AI generated content">Generative Fill</button>
+                <button onclick="aiSimulate('bg-remove')" style="width: auto; margin: 0; padding: 3px 8px;" title="Removes background from current layer">Remove Background</button>
+                <button onclick="aiSimulate('upscale')" style="width: auto; margin: 0; padding: 3px 8px;" title="Upscales canvas 2x">Upscale 2x</button>
+                <button onclick="aiSimulate('style')" style="width: auto; margin: 0; padding: 3px 8px;" title="Applies a stylized artistic filter">Style Transfer</button>
+                <button onclick="aiSimulate('txt2img')" style="width: auto; margin: 0; padding: 3px 8px;" title="Generates image from text">Text to Image</button>
+
+                <div id="ai-loading" style="display: none; align-items: center; gap: 5px; margin-left: auto; color: #a0a0ff; font-weight: bold;">
+                    <span class="spinner" style="display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(160,160,255,0.3); border-radius: 50%; border-top-color: #a0a0ff; animation: spin 1s ease-in-out infinite;"></span>
+                    Processing AI...
+                </div>
             </div>
 
             <div id="canvas-area">
@@ -955,6 +989,7 @@ let fontFamily = 'Arial';
 let fontBold = false;
 let fontItalic = false;
 let wandTolerance = 30;
+let sprayType = 'scatter';
 let polygonPoints = []; // For Polygon Lasso
 let penPath = []; // For Pen Tool [{x, y, type: 'M'|'L'|'Q'|'C', cp1x, cp1y, cp2x, cp2y}]
 let isDraggingPen = false;
@@ -1410,6 +1445,10 @@ document.getElementById('wand-tolerance').addEventListener('change', (e) => {
     wandTolerance = parseInt(e.target.value) || 30;
 });
 
+document.getElementById('spray-type').addEventListener('change', (e) => {
+    sprayType = e.target.value;
+});
+
 // --- Coordinate Helper ---
 function getCanvasCoordinates(e) {
     const rect = mainCanvas.getBoundingClientRect();
@@ -1538,7 +1577,7 @@ function startPosition(e) {
         renderCanvas();
     }
 
-    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn'];
+    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn', 'spray', 'watercolor', 'marker', 'pencil'];
     if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone' || advancedBrushes.includes(currentTool)) {
         if (isAirbrush && currentTool === 'brush') {
             // Start Airbrush
@@ -1880,7 +1919,7 @@ function draw(e) {
     }
 
     // Handle Brush/Eraser/Clone/Advanced Brushes (Real-time)
-    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn'];
+    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn', 'spray', 'watercolor', 'marker', 'pencil'];
     if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone' || advancedBrushes.includes(currentTool)) {
 
         // If Airbrush is on, we just update coordinates for the interval loop and return
@@ -2089,6 +2128,117 @@ function draw(e) {
                 }
 
                 ctx.putImageData(newImgData, minX, minY);
+            }
+
+
+        } else if (currentTool === 'spray') {
+            const colorRgb = hexToRgb(activeColor);
+
+            let radius = brushSize / 2;
+            let density = brushSize; // amount of dots per tick
+
+            if (sprayType === 'wide') {
+                radius = brushSize;
+                density = brushSize * 2;
+            } else if (sprayType === 'thin') {
+                radius = brushSize / 4;
+                density = brushSize / 2;
+            }
+
+            if (sprayType === 'soft') {
+                 // Soft radial burst instead of dots
+                 const grad = ctx.createRadialGradient(localX, localY, 0, localX, localY, radius);
+                 grad.addColorStop(0, `rgba(${colorRgb}, ${brushOpacity * 0.1})`);
+                 grad.addColorStop(1, `rgba(${colorRgb}, 0)`);
+                 ctx.fillStyle = grad;
+                 ctx.beginPath();
+                 ctx.arc(localX, localY, radius, 0, Math.PI * 2);
+                 ctx.fill();
+            } else {
+                 // Scattered dots
+                 ctx.fillStyle = `rgba(${colorRgb}, ${brushOpacity})`;
+                 for (let i = 0; i < density; i++) {
+                     const r = radius * Math.sqrt(Math.random());
+                     const theta = Math.random() * 2 * Math.PI;
+                     const dotX = localX + r * Math.cos(theta);
+                     const dotY = localY + r * Math.sin(theta);
+                     ctx.fillRect(dotX, dotY, 1, 1);
+                 }
+            }
+
+        } else if (currentTool === 'watercolor') {
+            const colorRgb = hexToRgb(activeColor);
+
+            // Watercolor effect: overlapping semi-transparent circles with slight jitter
+            const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
+            const steps = Math.ceil(dist / (brushSize * 0.25)); // High overlap
+
+            ctx.globalCompositeOperation = 'multiply';
+
+            for (let i = 0; i <= steps; i++) {
+                const t = steps === 0 ? 1 : i / steps;
+                let cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
+                let cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
+
+                // Add slight jitter for natural edge
+                cx += (Math.random() - 0.5) * brushSize * 0.1;
+                cy += (Math.random() - 0.5) * brushSize * 0.1;
+
+                const grad = ctx.createRadialGradient(cx, cy, brushSize/4, cx, cy, brushSize/2);
+                grad.addColorStop(0, `rgba(${colorRgb}, ${brushOpacity * 0.2})`); // Core is denser
+                grad.addColorStop(1, `rgba(${colorRgb}, 0)`); // Edge fades out softly
+
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(cx, cy, brushSize/2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalCompositeOperation = 'source-over';
+
+        } else if (currentTool === 'marker') {
+            const colorRgb = hexToRgb(activeColor);
+
+            // Marker effect: flat semi-transparent hard edge, overlapping darkens
+            const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
+            const steps = Math.ceil(dist);
+
+            // We use 'multiply' to simulate marker ink overlapping
+            ctx.globalCompositeOperation = 'multiply';
+            ctx.fillStyle = `rgba(${colorRgb}, ${brushOpacity * 0.5})`; // Always partly transparent
+
+            for (let i = 0; i <= steps; i++) {
+                const t = steps === 0 ? 1 : i / steps;
+                const cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
+                const cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
+
+                ctx.beginPath();
+                ctx.arc(cx, cy, brushSize/2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalCompositeOperation = 'source-over';
+
+        } else if (currentTool === 'pencil') {
+            const colorRgb = hexToRgb(activeColor);
+
+            // Pencil effect: thin, hard edge with low opacity and jitter
+            const dist = Math.hypot(localX - (window.lastX || localX), localY - (window.lastY || localY));
+            const steps = Math.ceil(dist);
+
+            ctx.fillStyle = `rgba(${colorRgb}, ${brushOpacity * 0.7})`;
+
+            for (let i = 0; i <= steps; i++) {
+                const t = steps === 0 ? 1 : i / steps;
+                let cx = (window.lastX || localX) + (localX - (window.lastX || localX)) * t;
+                let cy = (window.lastY || localY) + (localY - (window.lastY || localY)) * t;
+
+                // Jitter to simulate paper texture
+                cx += (Math.random() - 0.5) * 1;
+                cy += (Math.random() - 0.5) * 1;
+
+                // Draw small 1x1 or 2x2 blocks depending on brush size, but cap the actual drawn size
+                const pencilSize = Math.max(1, Math.min(brushSize, 3));
+
+                ctx.fillRect(cx - pencilSize/2, cy - pencilSize/2, pencilSize, pencilSize);
             }
 
         } else if (currentTool === 'eraser') {
@@ -2658,6 +2808,7 @@ function setTool(tool) {
     document.getElementById('shape-options').style.display = isShape ? 'flex' : 'none';
     document.getElementById('text-options').style.display = tool === 'text' ? 'flex' : 'none';
     document.getElementById('wand-options').style.display = tool === 'wand' ? 'flex' : 'none';
+    document.getElementById('spray-options').style.display = tool === 'spray' ? 'flex' : 'none';
 
     const extraShapeOpts = document.getElementById('extra-shape-options');
     if (['polygon', 'star', 'rounded-rect'].includes(tool)) {
@@ -2680,7 +2831,7 @@ function setTool(tool) {
 }
 
 function getCursorForTool(tool) {
-    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn'];
+    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn', 'spray', 'watercolor', 'marker', 'pencil'];
     if(tool === 'brush' || tool === 'eraser' || tool === 'clone' || advancedBrushes.includes(tool)) return 'crosshair';
     else if(tool === 'pen') return 'crosshair'; // Usually pen tool has custom cursor, but crosshair works
     else if(tool === 'move') return 'move';
@@ -3500,6 +3651,198 @@ function hslToRgb(h, s, l) {
         b = hue2rgb(p, q, h - 1/3);
     }
     return [r * 255, g * 255, b * 255];
+}
+
+
+// --- Simulated AI Features ---
+
+function showAILoading(show) {
+    document.getElementById('ai-loading').style.display = show ? 'flex' : 'none';
+}
+
+function aiSimulate(action) {
+    const layer = layerManager.getActiveLayer();
+    if (!layer || !layer.visible) {
+        alert("No active layer selected.");
+        return;
+    }
+
+    if (action === 'fill' && !selectionManager.hasSelection) {
+        alert("Generative Fill requires a selection.");
+        return;
+    }
+
+    let promptText = "";
+    if (action === 'txt2img') {
+        promptText = prompt("Describe the image to generate:", "A cute robot painting");
+        if (!promptText) return;
+    } else if (action === 'fill') {
+        promptText = prompt("What should AI generate here? (Leave empty for contextual fill)", "Surrounding background");
+        if (promptText === null) return;
+    } else if (action === 'style') {
+        promptText = prompt("Enter style (e.g. 'Cyberpunk', 'Watercolor', 'Sketch'):", "Cyberpunk");
+        if (!promptText) return;
+    }
+
+    showAILoading(true);
+
+    // Simulate API delay
+    setTimeout(() => {
+        showAILoading(false);
+        applyAIFeature(action, layer, promptText);
+    }, 2500); // 2.5 seconds wait
+}
+
+function applyAIFeature(action, layer, promptText) {
+    const w = layer.canvas.width;
+    const h = layer.canvas.height;
+    const ctx = layer.ctx;
+
+    ctx.save();
+
+    if (action === 'fill') {
+        // Simulating generative fill inside selection mask
+        if (selectionManager.hasSelection) {
+             selectionManager.clipContext(ctx);
+
+             // Draw noise/pattern
+             const tempCanvas = document.createElement('canvas');
+             tempCanvas.width = w;
+             tempCanvas.height = h;
+             const tCtx = tempCanvas.getContext('2d');
+
+             const idata = tCtx.createImageData(w, h);
+             const d = idata.data;
+             for (let i = 0; i < d.length; i += 4) {
+                 d[i] = Math.random() * 255;
+                 d[i+1] = Math.random() * 255;
+                 d[i+2] = Math.random() * 255;
+                 d[i+3] = 255;
+             }
+             tCtx.putImageData(idata, 0, 0);
+
+             // Blur to make it look like "content aware fill" blending
+             tCtx.filter = 'blur(10px)';
+             tCtx.drawImage(tempCanvas, 0, 0);
+
+             ctx.drawImage(tempCanvas, 0, 0);
+
+             // Optionally add text
+             if (promptText) {
+                 ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                 ctx.fillRect(0, 0, w, h);
+                 ctx.fillStyle = '#000';
+                 ctx.font = '20px Arial';
+                 ctx.textAlign = 'center';
+                 ctx.fillText("[AI: " + promptText + "]", w/2, h/2);
+             }
+
+             ctx.restore();
+             selectionManager.clearSelection();
+        }
+    } else if (action === 'bg-remove') {
+        // Simulating Background Removal
+        // We do a very rough alpha threshold or inverted circle mask
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = w;
+        tempCanvas.height = h;
+        const tCtx = tempCanvas.getContext('2d');
+        tCtx.drawImage(layer.canvas, 0, 0);
+
+        const idata = tCtx.getImageData(0, 0, w, h);
+        const d = idata.data;
+
+        // Let's pretend anything near the edges is background.
+        // We'll mask out a soft vignette.
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const i = (y * w + x) * 4;
+                const distFromCenter = Math.hypot(x - w/2, y - h/2);
+                const maxDist = Math.hypot(w/2, h/2);
+
+                if (distFromCenter > maxDist * 0.5) {
+                    // Fade out
+                    const fade = 1 - ((distFromCenter - maxDist * 0.5) / (maxDist * 0.5));
+                    d[i+3] = Math.max(0, Math.min(255, d[i+3] * fade));
+                }
+            }
+        }
+        ctx.putImageData(idata, 0, 0);
+
+    } else if (action === 'upscale') {
+        // Actual 2x upscale using Native canvas scaling
+        const newW = mainCanvas.width * 2;
+        const newH = mainCanvas.height * 2;
+
+        performCrop(0, 0, newW, newH); // This resizes managers and canvases
+
+        // Now scale up all layers
+        layerManager.layers.forEach(l => {
+            const temp = document.createElement('canvas');
+            temp.width = l.canvas.width;
+            temp.height = l.canvas.height;
+            temp.getContext('2d').drawImage(l.canvas, 0, 0);
+
+            l.canvas.width = newW;
+            l.canvas.height = newH;
+
+            l.ctx.imageSmoothingEnabled = false; // Nearest neighbor for pixel art look? Or true for normal.
+            l.ctx.imageSmoothingQuality = 'high';
+            l.ctx.drawImage(temp, 0, 0, l.canvas.width/2, l.canvas.height/2, 0, 0, newW, newH);
+
+            // Re-center
+            l.x *= 2;
+            l.y *= 2;
+        });
+
+        // Reset zoom to fit
+        zoomLevel = 0.5;
+
+    } else if (action === 'style') {
+        // Simulate style transfer with simple convolution/color shift
+        const idata = ctx.getImageData(0, 0, w, h);
+        const d = idata.data;
+
+        // Add extreme contrast and shift colors
+        const styleHue = Math.random();
+
+        for(let i=0; i<d.length; i+=4) {
+            if (d[i+3] === 0) continue;
+
+            let [h, s, l] = rgbToHsl(d[i], d[i+1], d[i+2]);
+
+            s = Math.min(1, s * 1.5); // Boost saturation
+            h = (h + styleHue) % 1; // Shift hue globally
+
+            // Posterize
+            l = Math.round(l * 5) / 5;
+
+            let [r, g, b] = hslToRgb(h, s, l);
+            d[i] = r; d[i+1] = g; d[i+2] = b;
+        }
+        ctx.putImageData(idata, 0, 0);
+
+    } else if (action === 'txt2img') {
+        // Generate a new layer with a placeholder image
+        const newLayer = layerManager.addLayer("AI Image");
+        const tCtx = newLayer.ctx;
+
+        // Generate a funky gradient
+        const grad = tCtx.createLinearGradient(0, 0, w, h);
+        grad.addColorStop(0, `hsl(${Math.random() * 360}, 100%, 50%)`);
+        grad.addColorStop(1, `hsl(${Math.random() * 360}, 100%, 50%)`);
+        tCtx.fillStyle = grad;
+        tCtx.fillRect(w/4, h/4, w/2, h/2); // Draw smaller box in center
+
+        tCtx.fillStyle = '#fff';
+        tCtx.font = '24px sans-serif';
+        tCtx.textAlign = 'center';
+        tCtx.fillText(promptText, w/2, h/2);
+    }
+
+    ctx.restore();
+    historyManager.saveState();
+    renderCanvas();
 }
 
 // --- Shortcuts ---
