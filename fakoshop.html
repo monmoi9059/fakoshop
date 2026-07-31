@@ -128,6 +128,29 @@ body {
     overflow: auto;
     position: relative;
 }
+#ruler-top, #ruler-left {
+    position: absolute;
+    background-color: #2b2b2b;
+    z-index: 10;
+}
+#ruler-top {
+    top: 0; left: 0; right: 0; height: 15px; border-bottom: 1px solid #000;
+}
+#ruler-left {
+    top: 0; left: 0; bottom: 0; width: 15px; border-right: 1px solid #000;
+}
+.guide-h, .guide-v {
+    position: absolute;
+    background-color: #00ffff;
+    z-index: 20;
+    cursor: move;
+}
+.guide-h {
+    left: 0; right: 0; height: 1px;
+}
+.guide-v {
+    top: 0; bottom: 0; width: 1px;
+}
 #main-canvas {
     background-color: white;
     box-shadow: 0 0 20px rgba(0,0,0,0.5);
@@ -359,10 +382,12 @@ button:hover { background-color: #5a5a5a; }
             <div class="tool" title="Pencil" onclick="setTool('pencil')">✏️</div>
 
             <div class="tool" title="Eraser Tool (E)" onclick="setTool('eraser')">🧼</div>
+            <div class="tool" title="Magic Eraser" onclick="setTool('magic-eraser')">🪄🧼</div>
             <div class="tool" title="Clone Stamp (S)" onclick="setTool('clone')">©</div>
             <div class="tool" title="Smudge Tool" onclick="setTool('smudge')">👆</div>
             <div class="tool" title="Blur Tool" onclick="setTool('blur-brush')">💧</div>
             <div class="tool" title="Sharpen Tool" onclick="setTool('sharpen-brush')">🔺</div>
+            <div class="tool" title="Sponge Tool" onclick="setTool('sponge')">🧽</div>
             <div class="tool" title="Dodge Tool" onclick="setTool('dodge')">💡</div>
             <div class="tool" title="Burn Tool" onclick="setTool('burn')">🔥</div>
             <div class="tool" title="Move Tool (V)" onclick="setTool('move')">✥</div>
@@ -462,6 +487,13 @@ button:hover { background-color: #5a5a5a; }
                     </select>
                 </div>
 
+                <div id="sponge-options" style="display: none; margin-left: 10px; align-items: center; gap: 5px;">
+                    <select id="sponge-mode" style="padding: 2px;">
+                        <option value="saturate">Saturate</option>
+                        <option value="desaturate">Desaturate</option>
+                    </select>
+                </div>
+
 
                                 <span style="margin-left: auto;">Smoothing:</span>
                 <input type="range" id="brush-smoothing" min="0" max="100" value="10" style="width: 100px;">
@@ -483,6 +515,9 @@ button:hover { background-color: #5a5a5a; }
             </div>
 
             <div id="canvas-area">
+                <canvas id="ruler-top" height="15"></canvas>
+                <canvas id="ruler-left" width="15"></canvas>
+                <div id="guides-container" style="position:absolute; top:0; left:0; right:0; bottom:0; pointer-events:none; overflow:hidden;"></div>
                 <canvas id="main-canvas" width="800" height="600"></canvas>
             </div>
         </div>
@@ -492,6 +527,11 @@ button:hover { background-color: #5a5a5a; }
             <div class="panel-header">Navigator & Info</div>
             <div class="panel-content" style="height: 150px; display:flex; justify-content:center; align-items:center; color:#555; padding: 0;">
                 <canvas id="histogram-canvas" width="260" height="150" style="width: 100%; height: 100%; background: #222;"></canvas>
+            </div>
+
+            <div class="panel-header">History</div>
+            <div class="panel-content" id="history-list" style="max-height: 150px; overflow-y: auto; padding: 5px; font-size: 12px; background-color: #2b2b2b;">
+                <!-- History items populated by JS -->
             </div>
 
             <div class="panel-header">Quick Actions</div>
@@ -652,14 +692,26 @@ class Layer {
 }
 
 class LayerManager {
-    constructor(width, height) {
-        this.width = width;
-        this.height = height;
-        this.layers = [];
-        this.activeLayerId = null;
-        this.layerCounter = 0;
-    }
+    addMaskToActive() {
+        const layer = this.getActiveLayer();
+        if (!layer) return;
+        if (layer.maskCanvas) return; // Already has mask
 
+        layer.maskCanvas = document.createElement('canvas');
+        layer.maskCanvas.width = layer.canvas.width;
+        layer.maskCanvas.height = layer.canvas.height;
+        layer.maskCtx = layer.maskCanvas.getContext('2d');
+
+        // Fill mask with white (fully opaque layer)
+        layer.maskCtx.fillStyle = '#ffffff';
+        layer.maskCtx.fillRect(0, 0, layer.maskCanvas.width, layer.maskCanvas.height);
+
+        layer.editingMask = true; // Auto select mask for editing
+
+        historyManager.saveState("Add Layer Mask");
+        renderLayerList();
+        renderCanvas();
+    }
     addLayer(name = null) {
         this.layerCounter++;
         // Ensure unique name if auto-generated
@@ -835,7 +887,7 @@ class HistoryManager {
         this.pointer = -1;
     }
 
-    saveState() {
+    saveState(actionName = "Action") {
         // Remove redo states if we are in the middle of the stack
         if (this.pointer < this.stack.length - 1) {
             this.stack = this.stack.slice(0, this.pointer + 1);
@@ -864,6 +916,7 @@ class HistoryManager {
         });
 
         const fullState = {
+            actionName: actionName,
             layers: state,
             activeLayerId: layerManager.activeLayerId,
             layerCounter: layerManager.layerCounter,
@@ -882,12 +935,14 @@ class HistoryManager {
         }
 
         console.log("State saved. Pointer:", this.pointer);
+        this.renderHistory();
     }
 
     undo() {
         if (this.pointer > 0) {
             this.pointer--;
             this.restoreState(this.stack[this.pointer]);
+            this.renderHistory();
         }
     }
 
@@ -895,7 +950,41 @@ class HistoryManager {
         if (this.pointer < this.stack.length - 1) {
             this.pointer++;
             this.restoreState(this.stack[this.pointer]);
+            this.renderHistory();
         }
+    }
+
+    jumpToState(index) {
+        if (index >= 0 && index < this.stack.length) {
+            this.pointer = index;
+            this.restoreState(this.stack[this.pointer]);
+            this.renderHistory();
+        }
+    }
+
+    renderHistory() {
+        const list = document.getElementById('history-list');
+        if (!list) return;
+        list.innerHTML = '';
+
+        this.stack.forEach((state, index) => {
+            const item = document.createElement('div');
+            item.className = `layer-item ${index === this.pointer ? 'active' : ''}`;
+            // If it's ahead of pointer (redo state), make it look disabled
+            if (index > this.pointer) {
+                item.style.opacity = '0.5';
+            }
+
+            item.onclick = () => this.jumpToState(index);
+
+            const name = document.createElement('span');
+            name.innerText = state.actionName || (index === 0 ? "Initial State" : `Step ${index}`);
+            item.appendChild(name);
+            list.appendChild(item);
+        });
+
+        // Auto scroll to bottom
+        list.scrollTop = list.scrollHeight;
     }
 
     restoreState(state) {
@@ -1016,6 +1105,7 @@ class SelectionManager {
 }
 
 // --- Core Variables ---
+let marchOffset = 0;
 const mainCanvas = document.getElementById('main-canvas');
 const mainCtx = mainCanvas.getContext('2d');
 const layerManager = new LayerManager(mainCanvas.width, mainCanvas.height);
@@ -1092,6 +1182,19 @@ function init() {
 
     // Handle Window Resize (optional but good for UX)
     window.addEventListener('resize', handleResize);
+
+    drawRulers();
+    // Start animation loop for marching ants
+    requestAnimationFrame(animateSelection);
+}
+
+function animateSelection() {
+    if (selectionManager.hasSelection && currentTool !== 'crop') {
+        marchOffset++;
+        if (marchOffset > 16) marchOffset = 0;
+        renderCanvas();
+    }
+    requestAnimationFrame(animateSelection);
 }
 
 function handleResize() {
@@ -1171,9 +1274,9 @@ function renderCanvas() {
     if (selectionManager.hasSelection) {
         mainCtx.save();
         mainCtx.lineWidth = 1 / zoomLevel;
-        mainCtx.setLineDash([4 / zoomLevel, 4 / zoomLevel]);
 
         if (currentTool === 'crop') {
+            mainCtx.setLineDash([4 / zoomLevel, 4 / zoomLevel]);
             // Darken area outside crop
             mainCtx.fillStyle = 'rgba(0,0,0,0.5)';
             mainCtx.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
@@ -1190,17 +1293,60 @@ function renderCanvas() {
                               (window.lastMouseX || selectionManager.startX) - selectionManager.startX,
                               (window.lastMouseY || selectionManager.startY) - selectionManager.startY); // Approximation, relies on updateSelection
 
-            // Since `maskCanvas` contains the rect, we can just outline it if simple
-            // But for live drag, updateSelection logic handles rendering to maskCanvas
-            // We need to outline the non-transparent part of maskCanvas?
-
-            // Better: updateSelection already fills maskCanvas.
-            // We just need to visualize it nicely for Crop.
         } else {
-            mainCtx.strokeStyle = '#000';
-            mainCtx.globalAlpha = 0.2;
-            mainCtx.fillStyle = '#00f';
-            mainCtx.drawImage(selectionManager.maskCanvas, 0, 0);
+            // "Marching Ants" outline (black and white dashes)
+            // Instead of drawing the mask as a blue blob, we need to draw the stroke of the mask.
+            // Since we have a pixel mask, outlining it perfectly in canvas is hard without path data.
+            // But we can approximate by drawing it multiple times with offsets and composite operations,
+            // or simply draw the mask, then stroke the boundary.
+            // The simplest way for a raster mask is edge detection, but that's slow.
+            // However, magic wand/marquee just fill the mask.
+            // Let's use the mask to clip, and then stroke a big rect, OR use an edge detection shader.
+            // Actually, for simplicity and performance in JS:
+            // Draw mask shifted 1px all directions with destination-out to leave only edges.
+
+            const temp = document.createElement('canvas');
+            temp.width = mainCanvas.width;
+            temp.height = mainCanvas.height;
+            const tCtx = temp.getContext('2d');
+
+            // Draw solid mask
+            tCtx.drawImage(selectionManager.maskCanvas, 0, 0);
+
+            // Erase inner part
+            tCtx.globalCompositeOperation = 'destination-out';
+            tCtx.drawImage(selectionManager.maskCanvas, 1, 0);
+            tCtx.drawImage(selectionManager.maskCanvas, -1, 0);
+            tCtx.drawImage(selectionManager.maskCanvas, 0, 1);
+            tCtx.drawImage(selectionManager.maskCanvas, 0, -1);
+
+            // Now temp canvas contains only the 1px edge of the selection.
+            // We want it to be dashed black and white.
+            // Draw white edge
+            mainCtx.globalAlpha = 1;
+
+            // Create a pattern for the marching ants
+            const patCanvas = document.createElement('canvas');
+            patCanvas.width = 16;
+            patCanvas.height = 16;
+            const pCtx = patCanvas.getContext('2d');
+            pCtx.fillStyle = 'white';
+            pCtx.fillRect(0,0,16,16);
+            pCtx.fillStyle = 'black';
+            pCtx.fillRect(0,0,8,16); // Half black half white
+
+            // Draw edge
+            mainCtx.globalCompositeOperation = 'source-over';
+            mainCtx.drawImage(temp, 0, 0); // Need to apply pattern to it.
+
+            // Better way: use source-in on the edge
+            tCtx.globalCompositeOperation = 'source-in';
+            // Translate pattern by marchOffset
+            tCtx.translate(marchOffset, marchOffset);
+            tCtx.fillStyle = tCtx.createPattern(patCanvas, 'repeat');
+            tCtx.fillRect(-marchOffset, -marchOffset, temp.width, temp.height);
+
+            mainCtx.drawImage(temp, 0, 0);
         }
 
         mainCtx.restore();
@@ -1398,8 +1544,17 @@ function renderLayerList() {
     [...layerManager.layers].reverse().forEach(layer => {
         const item = document.createElement('div');
         item.className = `layer-item ${layer.id === layerManager.activeLayerId ? 'active' : ''}`;
+
+        // Custom styling for layers with masks
+        if (layer.maskCanvas) {
+            item.style.borderLeft = layer.editingMask ? '4px solid #fff' : '4px solid transparent';
+        }
+
         item.onclick = () => {
             layerManager.activeLayerId = layer.id;
+            if (layer.maskCanvas) {
+                layer.editingMask = false; // default to editing image when clicked
+            }
             renderLayerList();
         };
 
@@ -1413,9 +1568,33 @@ function renderLayerList() {
 
         const name = document.createElement('span');
         name.innerText = layer.name;
+        name.style.flex = "1";
 
         item.appendChild(eye);
         item.appendChild(name);
+
+        // Add Mask Indicator if it exists
+        if (layer.maskCanvas) {
+            const maskThumb = document.createElement('div');
+            maskThumb.style.width = '20px';
+            maskThumb.style.height = '15px';
+            maskThumb.style.border = '1px solid #777';
+            maskThumb.style.backgroundColor = '#fff'; // Usually white by default
+            maskThumb.style.marginLeft = '5px';
+            maskThumb.title = "Layer Mask";
+            if (layer.editingMask) {
+                maskThumb.style.borderColor = '#0078d7';
+                maskThumb.style.borderWidth = '2px';
+            }
+            maskThumb.onclick = (e) => {
+                e.stopPropagation();
+                layerManager.activeLayerId = layer.id;
+                layer.editingMask = true;
+                renderLayerList();
+            };
+            item.appendChild(maskThumb);
+        }
+
         list.appendChild(item);
     });
 }
@@ -1654,7 +1833,7 @@ function startPosition(e) {
         renderCanvas();
     }
 
-    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn', 'spray', 'watercolor', 'marker', 'pencil'];
+    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn', 'sponge', 'spray', 'watercolor', 'marker', 'pencil'];
     if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone' || advancedBrushes.includes(currentTool)) {
 const isContinuous = (isAirbrush && currentTool === 'brush') || currentTool === 'spray';
 
@@ -2015,7 +2194,7 @@ function draw(e, isContinuousMock = false) {
     }
 
     // Handle Brush/Eraser/Clone/Advanced Brushes (Real-time)
-    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn', 'spray', 'watercolor', 'marker', 'pencil'];
+    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn', 'sponge', 'spray', 'watercolor', 'marker', 'pencil'];
     if (currentTool === 'brush' || currentTool === 'eraser' || currentTool === 'clone' || advancedBrushes.includes(currentTool)) {
         const layer = layerManager.getActiveLayer();
         if(layer && selectionManager.hasSelection) {
@@ -2067,8 +2246,8 @@ function draw(e, isContinuousMock = false) {
             ctx.restore();
             // No stroke, we manually painted.
 
-        } else if (['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn'].includes(currentTool)) {
-            // Advanced Brushes (Smudge, Blur, Sharpen, Dodge, Burn)
+        } else if (['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn', 'sponge'].includes(currentTool)) {
+            // Advanced Brushes (Smudge, Blur, Sharpen, Dodge, Burn, Sponge)
             const r = Math.ceil(brushSize / 2);
 
             let sampleMinX = Math.floor(localX - r);
@@ -2155,10 +2334,13 @@ function draw(e, isContinuousMock = false) {
                             }
                         }
                     }
-                } else if (currentTool === 'dodge' || currentTool === 'burn') {
+                } else if (currentTool === 'dodge' || currentTool === 'burn' || currentTool === 'sponge') {
                     // Scale strength to be mild per-tick (max 5% change per tick at 100% opacity)
                     const effectStrength = strength * 0.05;
                     const factor = currentTool === 'dodge' ? (1 + effectStrength) : (1 - effectStrength);
+
+                    const spongeMode = document.getElementById('sponge-mode') ? document.getElementById('sponge-mode').value : 'saturate';
+                    const satFactor = spongeMode === 'saturate' ? (1 + effectStrength) : (1 - effectStrength);
 
                     for (let py = 0; py < bh; py++) {
                         for (let px = 0; px < bw; px++) {
@@ -2169,12 +2351,23 @@ function draw(e, isContinuousMock = false) {
                             if (dCenter <= r) {
                                 const falloff = 1 - (dCenter / r);
                                 const currentFactor = 1 + (factor - 1) * falloff;
+                                const currentSatFactor = 1 + (satFactor - 1) * falloff;
                                 const idx = (py * bw + px) * 4;
 
                                 if (newData[idx+3] > 0) { // Only affect non-transparent
-                                    newData[idx] = Math.min(255, Math.max(0, newData[idx] * currentFactor));
-                                    newData[idx+1] = Math.min(255, Math.max(0, newData[idx+1] * currentFactor));
-                                    newData[idx+2] = Math.min(255, Math.max(0, newData[idx+2] * currentFactor));
+                                    if (currentTool === 'dodge' || currentTool === 'burn') {
+                                        newData[idx] = Math.min(255, Math.max(0, newData[idx] * currentFactor));
+                                        newData[idx+1] = Math.min(255, Math.max(0, newData[idx+1] * currentFactor));
+                                        newData[idx+2] = Math.min(255, Math.max(0, newData[idx+2] * currentFactor));
+                                    } else {
+                                        // Sponge tool
+                                        let [h, s, l] = rgbToHsl(newData[idx], newData[idx+1], newData[idx+2]);
+                                        s = Math.min(1, Math.max(0, s * currentSatFactor));
+                                        let [r_new, g_new, b_new] = hslToRgb(h, s, l);
+                                        newData[idx] = r_new;
+                                        newData[idx+1] = g_new;
+                                        newData[idx+2] = b_new;
+                                    }
                                 }
                             }
                         }
@@ -2614,6 +2807,10 @@ function handleCanvasClick(e) {
     } else if (currentTool === 'wand') {
         // Magic Wand Logic
         magicWandSelection(layer, Math.floor(localX), Math.floor(localY), wandTolerance);
+    } else if (currentTool === 'magic-eraser') {
+        floodFill(layer, Math.floor(localX), Math.floor(localY), [0,0,0,0]);
+        historyManager.saveState();
+        renderCanvas();
     } else if (currentTool === 'picker') {
         const pixel = layer.ctx.getImageData(localX, localY, 1, 1).data;
         const hex = rgbToHex(pixel[0], pixel[1], pixel[2]);
@@ -2954,6 +3151,7 @@ function setTool(tool) {
     document.getElementById('text-options').style.display = tool === 'text' ? 'flex' : 'none';
     document.getElementById('wand-options').style.display = tool === 'wand' ? 'flex' : 'none';
     document.getElementById('spray-options').style.display = tool === 'spray' ? 'flex' : 'none';
+    document.getElementById('sponge-options').style.display = tool === 'sponge' ? 'flex' : 'none';
 
     const extraShapeOpts = document.getElementById('extra-shape-options');
     if (['polygon', 'star', 'rounded-rect'].includes(tool)) {
@@ -2976,7 +3174,7 @@ function setTool(tool) {
 }
 
 function getCursorForTool(tool) {
-    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn', 'spray', 'watercolor', 'marker', 'pencil'];
+    const advancedBrushes = ['smudge', 'blur-brush', 'sharpen-brush', 'dodge', 'burn', 'sponge', 'spray', 'watercolor', 'marker', 'pencil'];
     if(tool === 'brush' || tool === 'eraser' || tool === 'clone' || advancedBrushes.includes(tool)) return 'crosshair';
     else if(tool === 'pen') return 'crosshair';
     else if(tool === 'move') return 'move';
@@ -2985,7 +3183,7 @@ function getCursorForTool(tool) {
     else if(tool === 'text') return 'text';
     else if(tool === 'picker') return 'cell';
     else if(tool === 'crop') return 'crosshair';
-    else if(tool === 'wand' || tool === 'gradient') return 'crosshair';
+    else if(tool === 'wand' || tool === 'gradient' || tool === 'magic-eraser') return 'crosshair';
     return 'default';
 }
 
@@ -3754,6 +3952,69 @@ function transformLayer(type) {
             }
         }
     }
+}
+
+// --- Guides and Rulers ---
+const guides = [];
+
+function drawRulers() {
+    const canvasArea = document.getElementById('canvas-area');
+    const rTop = document.getElementById('ruler-top');
+    const rLeft = document.getElementById('ruler-left');
+    if (!rTop || !rLeft) return;
+
+    rTop.width = canvasArea.clientWidth;
+    rLeft.height = canvasArea.clientHeight;
+
+    const ctxTop = rTop.getContext('2d');
+    const ctxLeft = rLeft.getContext('2d');
+
+    ctxTop.clearRect(0,0,rTop.width, rTop.height);
+    ctxLeft.clearRect(0,0,rLeft.width, rLeft.height);
+
+    ctxTop.fillStyle = '#ccc';
+    ctxLeft.fillStyle = '#ccc';
+    ctxTop.font = '9px Arial';
+    ctxLeft.font = '9px Arial';
+
+    // Draw top ruler
+    for(let i=0; i<rTop.width; i+=10 * zoomLevel) {
+        const val = Math.floor((i - panX) / zoomLevel);
+        const tickHeight = (val % 100 === 0) ? 15 : (val % 50 === 0 ? 10 : 5);
+        ctxTop.fillRect(i, 15-tickHeight, 1, tickHeight);
+        if(val % 100 === 0) ctxTop.fillText(val, i+2, 9);
+    }
+
+    // Draw left ruler
+    for(let i=0; i<rLeft.height; i+=10 * zoomLevel) {
+        const val = Math.floor((i - panY) / zoomLevel);
+        const tickWidth = (val % 100 === 0) ? 15 : (val % 50 === 0 ? 10 : 5);
+        ctxLeft.fillRect(15-tickWidth, i, tickWidth, 1);
+        if(val % 100 === 0) {
+            ctxLeft.save();
+            ctxLeft.translate(9, i+2);
+            ctxLeft.rotate(-Math.PI/2);
+            ctxLeft.fillText(val, 0, 0);
+            ctxLeft.restore();
+        }
+    }
+}
+
+function updateGuides() {
+    const container = document.getElementById('guides-container');
+    if(!container) return;
+    container.innerHTML = '';
+
+    guides.forEach(g => {
+        const div = document.createElement('div');
+        div.className = g.type === 'h' ? 'guide-h' : 'guide-v';
+        if (g.type === 'h') {
+            div.style.top = (g.pos * zoomLevel + panY) + 'px';
+        } else {
+            div.style.left = (g.pos * zoomLevel + panX) + 'px';
+        }
+        container.appendChild(div);
+    });
 }
 
 function updateHistogram() {
