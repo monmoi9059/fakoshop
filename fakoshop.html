@@ -692,6 +692,14 @@ class Layer {
 }
 
 class LayerManager {
+    constructor(width, height) {
+        this.width = width;
+        this.height = height;
+        this.layers = [];
+        this.activeLayerId = null;
+        this.layerCounter = 0;
+    }
+
     addMaskToActive() {
         const layer = this.getActiveLayer();
         if (!layer) return;
