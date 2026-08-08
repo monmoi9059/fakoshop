@@ -27,6 +27,9 @@
                 <div onclick="transformLayer('scale')">Scale Layer...</div>
                 <div onclick="transformLayer('rotate')">Rotate Layer...</div>
                 <hr>
+                <div onclick="transformLayer('flipH')">Flip Horizontal</div>
+                <div onclick="transformLayer('flipV')">Flip Vertical</div>
+                <hr>
                 <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Cut</div>
                 <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Copy</div>
                 <div onclick="alert('Cut/Copy/Paste not implemented (requires permissions)')">Paste</div>
@@ -85,8 +88,19 @@
             <div class="tool" title="Circle (C)" onclick="setTool('circle')">⭕</div>
             <div class="tool" title="Line (L)" onclick="setTool('line')">📏</div>
             <div class="tool" title="Text (T)" onclick="setTool('text')">TXT</div>
+            <div class="tool" title="Rounded Rectangle" onclick="setTool('roundrect')">▢</div>
+            <div class="tool" title="Triangle" onclick="setTool('triangle')">△</div>
+            <div class="tool" title="Right Triangle" onclick="setTool('rtriangle')">📐</div>
+            <div class="tool" title="Diamond" onclick="setTool('diamond')">♢</div>
+            <div class="tool" title="Pentagon" onclick="setTool('pentagon')">⬠</div>
+            <div class="tool" title="Hexagon" onclick="setTool('hexagon')">⬡</div>
+            <div class="tool" title="Star" onclick="setTool('star')">⭐</div>
+            <div class="tool" title="Arrow" onclick="setTool('arrow')">➡</div>
+            <div class="tool" title="Heart" onclick="setTool('heart')">♥</div>
+            <div class="tool" title="Bubble" onclick="setTool('bubble')">💬</div>
             <div class="tool" title="Marquee Select (M)" onclick="setTool('marquee')">⚃</div>
             <div class="tool" title="Lasso Select (L)" onclick="setTool('lasso')">➰</div>
+            <div class="tool" title="Polygonal Lasso" onclick="setTool('poly-lasso')">📐</div>
             <div class="tool" title="Clear Selection (Esc)" onclick="selectionManager.clearSelection()">✖</div>
             <div style="flex:1"></div>
             <div style="display:flex; flex-direction:column; align-items:center; gap:2px; margin-bottom:5px;">
@@ -104,6 +118,24 @@
                 <span style="margin-left: 10px;">Opacity:</span>
                 <input type="range" id="brush-opacity" min="1" max="100" value="100" style="width: 100px;">
                 <span id="brush-opacity-val">100%</span>
+
+                <span class="tool-option brush-option" style="margin-left: 10px;">Type:</span>
+                <select id="brush-type" class="tool-option brush-option">
+                    <option value="round">Round</option>
+                    <option value="pencil">Pencil</option>
+                    <option value="square">Square</option>
+                    <option value="airbrush">Airbrush</option>
+                    <option value="calligraphy">Calligraphy</option>
+                    <option value="marker">Marker</option>
+                    <option value="spray">Spray</option>
+                </select>
+
+                <span class="tool-option shape-option" style="margin-left: 10px; display:none;">Style:</span>
+                <select id="shape-style" class="tool-option shape-option" style="display:none;">
+                    <option value="fill">Fill</option>
+                    <option value="outline">Outline</option>
+                    <option value="both">Both</option>
+                </select>
 
                 <span style="margin-left: auto;">Smoothing: 10%</span>
             </div>

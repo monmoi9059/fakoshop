@@ -333,6 +333,25 @@ class SelectionManager {
     }
 
     startSelection(x, y) {
+        if (currentTool === 'poly-lasso') {
+             // Start new poly if not building
+             if (!this.isBuildingPoly) {
+                 this.clearSelection();
+                 this.hasSelection = true;
+                 this.isBuildingPoly = true;
+                 this.startX = x;
+                 this.startY = y;
+                 this.currentPath = [[x, y]];
+             } else {
+                 // Add point
+                 this.currentPath.push([x, y]);
+             }
+             return;
+        }
+
+        // Reset poly state if switching
+        this.isBuildingPoly = false;
+
         this.clearSelection();
         this.hasSelection = true;
         this.startX = x;
@@ -356,6 +375,20 @@ class SelectionManager {
             this.ctx.lineTo(x, y);
             this.ctx.stroke();
             this.currentPath.push([x, y]);
+        } else if (currentTool === 'poly-lasso') {
+             // Redraw path + line to current mouse
+             this.ctx.clearRect(0, 0, this.width, this.height);
+             this.ctx.strokeStyle = '#fff';
+             this.ctx.setLineDash([4, 4]);
+             this.ctx.beginPath();
+             if (this.currentPath.length > 0) {
+                 this.ctx.moveTo(this.currentPath[0][0], this.currentPath[0][1]);
+                 for (let p of this.currentPath) this.ctx.lineTo(p[0], p[1]);
+                 // Line to current mouse
+                 this.ctx.lineTo(x, y);
+             }
+             this.ctx.stroke();
+             this.ctx.setLineDash([]);
         }
 
         renderCanvas();
@@ -373,6 +406,34 @@ class SelectionManager {
             this.ctx.fillStyle = 'rgba(0,0,0,1)';
             this.ctx.fill();
         }
+        // Poly lasso doesn't end on mouse up
+        renderCanvas();
+    }
+
+    closePolySelection() {
+        if (currentTool !== 'poly-lasso') return;
+
+        this.ctx.clearRect(0, 0, this.width, this.height);
+        this.ctx.beginPath();
+        if (this.currentPath.length > 0) {
+            this.ctx.moveTo(this.currentPath[0][0], this.currentPath[0][1]);
+            for(let p of this.currentPath) this.ctx.lineTo(p[0], p[1]);
+        }
+        this.ctx.closePath();
+        this.ctx.fillStyle = 'rgba(0,0,0,1)';
+        this.ctx.fill();
+
+        // Reset path so next click starts new?
+        // Actually, logic in startSelection handles "if (!hasSelection)"
+        // But we just finished setting mask, so hasSelection is true.
+        // We need a flag or logic to know next click is NEW selection.
+        // Current logic: startSelection clears selection.
+        // So clicking again calls startSelection.
+        // We need to differentiate "adding point" from "starting new".
+        // Let's reset hasSelection to false? No, we need the mask.
+
+        // We need a separate state for "building poly".
+        this.isBuildingPoly = false;
         renderCanvas();
     }
 
@@ -399,6 +460,8 @@ let brushColor = '#000000';
 let secondaryColor = '#ffffff';
 let brushOpacity = 1;
 let startX, startY; // For shape tools
+let brushType = 'round';
+let shapeStyle = 'fill';
 
 // Zoom & Pan Variables
 let zoomLevel = 1.0;
@@ -507,7 +570,7 @@ function renderCanvas() {
     }
 
     // Draw Preview for shapes (if painting)
-    if (painting && ['rect', 'circle', 'line', 'gradient'].includes(currentTool)) {
+    if (painting && ['rect', 'circle', 'line', 'gradient', 'roundrect', 'triangle', 'rtriangle', 'diamond', 'pentagon', 'hexagon', 'star', 'arrow', 'heart', 'bubble'].includes(currentTool)) {
         drawShapePreview();
     }
 
@@ -636,6 +699,10 @@ function startPosition(e) {
     startX = coords.x;
     startY = coords.y;
 
+    // Reset interpolation state
+    window.lastX = startX;
+    window.lastY = startY;
+
     if (currentTool === 'move') {
         const layer = layerManager.getActiveLayer();
         if (layer) {
@@ -689,7 +756,7 @@ function startPosition(e) {
 
     painting = true;
 
-    if (currentTool === 'marquee' || currentTool === 'lasso' || currentTool === 'crop') {
+    if (currentTool === 'marquee' || currentTool === 'lasso' || currentTool === 'crop' || currentTool === 'poly-lasso') {
         selectionManager.startSelection(startX, startY);
         return;
     }
@@ -726,7 +793,7 @@ function endPosition(e) {
             return;
         }
 
-        if (currentTool === 'marquee' || currentTool === 'lasso' || currentTool === 'crop') {
+        if (currentTool === 'marquee' || currentTool === 'lasso' || currentTool === 'crop' || currentTool === 'poly-lasso') {
             selectionManager.endSelection(endX, endY);
             if (currentTool === 'crop') {
                  // Don't crop immediately, wait for double click or enter?
@@ -743,22 +810,8 @@ function endPosition(e) {
             }
 
              // Commit shapes
-            if (currentTool === 'rect') {
-                layer.ctx.fillStyle = brushColor;
-                layer.ctx.fillRect(startX, startY, endX - startX, endY - startY);
-            } else if (currentTool === 'circle') {
-                const radius = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
-                layer.ctx.fillStyle = brushColor;
-                layer.ctx.beginPath();
-                layer.ctx.arc(startX, startY, radius, 0, Math.PI * 2);
-                layer.ctx.fill();
-            } else if (currentTool === 'line') {
-                layer.ctx.strokeStyle = brushColor;
-                layer.ctx.lineWidth = brushSize;
-                layer.ctx.beginPath();
-                layer.ctx.moveTo(startX, startY);
-                layer.ctx.lineTo(endX, endY);
-                layer.ctx.stroke();
+            if (['rect', 'circle', 'line', 'roundrect', 'triangle', 'rtriangle', 'diamond', 'pentagon', 'hexagon', 'star', 'arrow', 'heart', 'bubble'].includes(currentTool)) {
+                drawShape(layer.ctx, currentTool, startX, startY, endX, endY, brushColor, brushSize, shapeStyle);
             } else if (currentTool === 'gradient') {
                 // Apply Gradient
                 const grad = layer.ctx.createLinearGradient(startX, startY, endX, endY);
@@ -855,7 +908,7 @@ function draw(e) {
     }
 
     // Handle Selection Tools
-    if (currentTool === 'marquee' || currentTool === 'lasso' || currentTool === 'crop') {
+    if (currentTool === 'marquee' || currentTool === 'lasso' || currentTool === 'crop' || currentTool === 'poly-lasso') {
         selectionManager.updateSelection(x, y);
         return;
     }
@@ -867,6 +920,12 @@ function draw(e) {
 
         const localX = (x - layer.x);
         const localY = (y - layer.y);
+
+        // Reset last pos if jump detected (e.g. mouse up/down)
+        if (!window.lastX || Math.abs(window.lastX - localX) > 100 || Math.abs(window.lastY - localY) > 100) {
+             window.lastX = localX;
+             window.lastY = localY;
+        }
 
         if (currentTool === 'clone') {
             if (cloneSourceX === null) return; // No source
@@ -968,17 +1027,130 @@ function draw(e) {
             // No stroke, we manually painted.
 
         } else {
-            // Normal Brush
-            ctx.lineWidth = brushSize;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
+            // Normal Brush & Advanced Brushes
             ctx.globalCompositeOperation = 'source-over';
-            ctx.strokeStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
 
-            ctx.lineTo(localX, localY);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(localX, localY);
+            if (brushType === 'pencil') {
+                ctx.lineWidth = 1;
+                ctx.fillStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
+                // Draw pixels along the line to avoid aliasing?
+                // Simple approach: Bresenham-like or just fillRect at points.
+                // But standard stroke with lineWidth 1 is anti-aliased.
+                // To get pixel-perfect pencil, we must align to integers and fill 1x1 rect.
+                // We'll approximate by just filling rect at current mouse position.
+                // Better: interpolate points if mouse moved fast.
+
+                // For this demo, let's stick to simple drawing at mouse pos for "pixel" feel
+                // Or standard stroke but without anti-aliasing (impossible on standard canvas context easily).
+                // Let's emulate by drawing small squares.
+
+                ctx.fillStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
+                // Interpolate
+                const points = getLinePoints(window.lastX || localX, window.lastY || localY, localX, localY);
+                points.forEach(p => {
+                    ctx.fillRect(Math.floor(p.x), Math.floor(p.y), brushSize, brushSize);
+                });
+                window.lastX = localX;
+                window.lastY = localY;
+
+            } else if (brushType === 'square') {
+                ctx.fillStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
+                // Interpolate to fill gaps
+                const points = getLinePoints(window.lastX || localX, window.lastY || localY, localX, localY);
+                points.forEach(p => {
+                    ctx.fillRect(p.x - brushSize/2, p.y - brushSize/2, brushSize, brushSize);
+                });
+                window.lastX = localX;
+                window.lastY = localY;
+
+            } else if (brushType === 'airbrush') {
+                // Draw radial gradient stamps
+                ctx.globalCompositeOperation = 'source-over'; // Accumulate?
+                // Airbrush usually builds up.
+                const grad = ctx.createRadialGradient(localX, localY, 0, localX, localY, brushSize);
+                grad.addColorStop(0, `rgba(${hexToRgb(brushColor)}, ${brushOpacity * 0.1})`); // Very low opacity per stamp
+                grad.addColorStop(1, `rgba(${hexToRgb(brushColor)}, 0)`);
+                ctx.fillStyle = grad;
+
+                // Spray density based on speed?
+                // Just draw one stamp per event
+                ctx.translate(localX, localY);
+                ctx.fillRect(-brushSize, -brushSize, brushSize*2, brushSize*2);
+                ctx.translate(-localX, -localY);
+
+            } else if (brushType === 'calligraphy') {
+                ctx.strokeStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
+                ctx.lineWidth = brushSize / 4; // Thin line width
+                // Draw a line segment corresponding to the brush tip angle (45 degrees) at each point along the path
+                // This is computationally expensive to interpolate perfectly.
+                // Simplified: Draw a flattened oval/rect at each point.
+
+                ctx.fillStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
+                const points = getLinePoints(window.lastX || localX, window.lastY || localY, localX, localY);
+
+                ctx.save();
+                // Fixed angle 45 deg
+                const angle = Math.PI / 4;
+
+                points.forEach(p => {
+                    ctx.save();
+                    ctx.translate(p.x, p.y);
+                    ctx.rotate(angle);
+                    ctx.fillRect(-brushSize/2, -brushSize/8, brushSize, brushSize/4);
+                    ctx.restore();
+                });
+                ctx.restore();
+                window.lastX = localX;
+                window.lastY = localY;
+
+            } else if (brushType === 'marker') {
+                ctx.lineWidth = brushSize;
+                ctx.lineCap = 'square';
+                ctx.lineJoin = 'bevel';
+                ctx.globalCompositeOperation = 'multiply'; // Marker effect (darkens intersection)
+                // If on transparent, multiply does nothing visible or just color.
+                // Source-over with low alpha is better for "stacking" color.
+                // But markers usually don't stack infinitely to black in one stroke.
+                // Let's use source-over with low alpha.
+                ctx.strokeStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity * 0.5})`;
+
+                ctx.beginPath();
+                ctx.moveTo(window.lastX || localX, window.lastY || localY);
+                ctx.lineTo(localX, localY);
+                ctx.stroke();
+
+                window.lastX = localX;
+                window.lastY = localY;
+
+            } else if (brushType === 'spray') {
+                ctx.fillStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
+                // Draw random particles
+                const density = brushSize * 2;
+                for (let i = 0; i < density; i++) {
+                    const radius = brushSize;
+                    const offsetX = (Math.random() - 0.5) * 2 * radius;
+                    const offsetY = (Math.random() - 0.5) * 2 * radius;
+                    // Circle constraint
+                    if (offsetX*offsetX + offsetY*offsetY <= radius*radius) {
+                        ctx.fillRect(localX + offsetX, localY + offsetY, 1, 1);
+                    }
+                }
+            } else {
+                // Round (Default)
+                ctx.lineWidth = brushSize;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.strokeStyle = `rgba(${hexToRgb(brushColor)}, ${brushOpacity})`;
+
+                ctx.lineTo(localX, localY);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(localX, localY);
+
+                // Clear interpolation state
+                window.lastX = localX;
+                window.lastY = localY;
+            }
         }
 
         ctx.restore();
@@ -1006,28 +1178,47 @@ function draw(e) {
     }
 }
 
+// --- Interpolation Helper ---
+function getLinePoints(x1, y1, x2, y2) {
+    const points = [];
+    const dx = Math.abs(x2 - x1);
+    const dy = Math.abs(y2 - y1);
+    const sx = (x1 < x2) ? 1 : -1;
+    const sy = (y1 < y2) ? 1 : -1;
+    let err = dx - dy;
+
+    let x = x1;
+    let y = y1;
+
+    while(true) {
+        points.push({x, y});
+        if (Math.abs(x - x2) < 1 && Math.abs(y - y2) < 1) break;
+        const e2 = 2 * err;
+        if (e2 > -dy) { err -= dy; x += sx; }
+        if (e2 < dx) { err += dx; y += sy; }
+    }
+    return points;
+}
+
 function drawShapePreview() {
     const ctx = mainCtx;
     const x = window.lastMouseX;
     const y = window.lastMouseY;
 
     ctx.save();
-    ctx.strokeStyle = '#000';
+    ctx.strokeStyle = '#000'; // Preview color
     ctx.lineWidth = 1 / zoomLevel;
     ctx.setLineDash([5 / zoomLevel, 5 / zoomLevel]);
 
-    if (currentTool === 'rect') {
-        ctx.strokeRect(startX, startY, x - startX, y - startY);
-    } else if (currentTool === 'circle') {
-        const radius = Math.sqrt(Math.pow(x - startX, 2) + Math.pow(y - startY, 2));
-        ctx.beginPath();
-        ctx.arc(startX, startY, radius, 0, Math.PI * 2);
-        ctx.stroke();
-    } else if (currentTool === 'line') {
-        ctx.beginPath();
-        ctx.moveTo(startX, startY);
-        ctx.lineTo(x, y);
-        ctx.stroke();
+    // For shapes that have fill/outline logic, we just outline the preview
+    // We pass 'outline' style to drawShape so it strokes.
+    // However, drawShape uses brushColor. We want preview color (black/white dash).
+    // So we'll override context after path creation?
+    // Actually, drawShape strokes/fills immediately.
+    // We need a way to just generate path or draw with override.
+
+    if (['rect', 'circle', 'roundrect', 'triangle', 'rtriangle', 'diamond', 'pentagon', 'hexagon', 'star', 'arrow', 'heart', 'bubble', 'line'].includes(currentTool)) {
+        drawShape(ctx, currentTool, startX, startY, x, y, '#000000', 1 / zoomLevel, 'outline', true);
     } else if (currentTool === 'gradient') {
         // Draw gradient vector line
         ctx.beginPath();
@@ -1043,6 +1234,171 @@ function drawShapePreview() {
     }
 
     ctx.restore();
+}
+
+function drawShape(ctx, tool, x1, y1, x2, y2, color, size, style, isPreview = false) {
+    ctx.save();
+    ctx.beginPath();
+
+    const w = x2 - x1;
+    const h = y2 - y1;
+
+    if (tool === 'rect') {
+        ctx.rect(x1, y1, w, h);
+    } else if (tool === 'roundrect') {
+        const r = Math.min(Math.abs(w), Math.abs(h)) * 0.2;
+        ctx.roundRect(x1, y1, w, h, r);
+    } else if (tool === 'circle') {
+        const radius = Math.sqrt(w*w + h*h);
+        ctx.arc(x1, y1, radius, 0, Math.PI * 2);
+    } else if (tool === 'line') {
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+    } else if (tool === 'triangle') {
+        // Isosceles
+        ctx.moveTo(x1 + w/2, y1);
+        ctx.lineTo(x1 + w, y1 + h);
+        ctx.lineTo(x1, y1 + h);
+        ctx.closePath();
+    } else if (tool === 'rtriangle') {
+        // Right Triangle
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x1 + w, y1 + h);
+        ctx.lineTo(x1, y1 + h);
+        ctx.closePath();
+    } else if (tool === 'diamond') {
+        ctx.moveTo(x1 + w/2, y1);
+        ctx.lineTo(x1 + w, y1 + h/2);
+        ctx.lineTo(x1 + w/2, y1 + h);
+        ctx.lineTo(x1, y1 + h/2);
+        ctx.closePath();
+    } else if (tool === 'pentagon') {
+        drawPolygon(ctx, x1 + w/2, y1 + h/2, Math.max(Math.abs(w), Math.abs(h))/2, 5);
+    } else if (tool === 'hexagon') {
+        drawPolygon(ctx, x1 + w/2, y1 + h/2, Math.max(Math.abs(w), Math.abs(h))/2, 6);
+    } else if (tool === 'star') {
+        drawStar(ctx, x1 + w/2, y1 + h/2, 5, Math.max(Math.abs(w), Math.abs(h))/2, Math.max(Math.abs(w), Math.abs(h))/4);
+    } else if (tool === 'arrow') {
+        // Simple arrow pointing right relative to bounding box
+        // We need to scale points to box
+        const cx = x1 + w/2;
+        const cy = y1 + h/2;
+        // ... complex path logic or simpler approach
+        // Let's do simple right arrow
+        const bw = w;
+        const bh = h;
+        // Arrow pointing in drag direction
+        // Head at x2, y2? Or shape fills rect?
+        // Shape fills rect defined by x1,y1 and x2,y2
+
+        // Horizontal arrow shape logic:
+        //      /|
+        // ----/ |
+        // |     |
+        // ----\ |
+        //      \|
+
+        // Let's normalize to 0..1 then scale
+        const shaftH = 0.5;
+        const headW = 0.4;
+
+        // Start from x1, y1 + h/4 ...
+        // Better:
+        // Tail: x1, y1 + h*(1-shaftH)/2
+        ctx.moveTo(x1, y1 + h * (1-shaftH)/2);
+        ctx.lineTo(x1 + w * (1-headW), y1 + h * (1-shaftH)/2);
+        ctx.lineTo(x1 + w * (1-headW), y1);
+        ctx.lineTo(x1 + w, y1 + h/2);
+        ctx.lineTo(x1 + w * (1-headW), y1 + h);
+        ctx.lineTo(x1 + w * (1-headW), y1 + h * (1 - (1-shaftH)/2)); // bottom of shaft
+        ctx.lineTo(x1, y1 + h * (1 - (1-shaftH)/2));
+        ctx.closePath();
+
+    } else if (tool === 'heart') {
+         // Bezier curves
+         const cx = x1 + w/2;
+         const cy = y1 + h/2; // Center
+         const topCurveHeight = h * 0.3;
+
+         ctx.moveTo(cx, y1 + h*0.2);
+         ctx.bezierCurveTo(cx + w/2, y1 - h*0.1, cx + w/2, y1 + h*0.5, cx, y2);
+         ctx.bezierCurveTo(cx - w/2, y1 + h*0.5, cx - w/2, y1 - h*0.1, cx, y1 + h*0.2);
+         ctx.closePath();
+
+    } else if (tool === 'bubble') {
+        const r = Math.min(Math.abs(w), Math.abs(h)) * 0.2;
+        ctx.roundRect(x1, y1, w, h * 0.8, r);
+        // Tail
+        ctx.moveTo(x1 + w * 0.2, y1 + h * 0.8);
+        ctx.lineTo(x1 + w * 0.1, y2);
+        ctx.lineTo(x1 + w * 0.4, y1 + h * 0.8);
+    }
+
+    if (isPreview) {
+        // Just stroke with current context settings
+        ctx.stroke();
+    } else {
+        // Apply Style
+        if (tool === 'line') {
+             ctx.strokeStyle = color;
+             ctx.lineWidth = size;
+             ctx.stroke();
+        } else {
+            ctx.fillStyle = color;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = size;
+
+            if (style === 'fill' || style === 'both') {
+                ctx.fill();
+            }
+            if (style === 'outline' || style === 'both') {
+                // Check if outline needs a different color? Usually same.
+                // But outline stroke width is `size`
+                if (style === 'both') {
+                    // Make outline distinct? Or just same color stroke
+                    // MS Paint uses secondary color for outline if both?
+                    // Let's stick to simple single color for now.
+                    ctx.stroke();
+                } else {
+                    ctx.stroke();
+                }
+            }
+        }
+    }
+
+    ctx.restore();
+}
+
+function drawPolygon(ctx, x, y, radius, sides) {
+    if (sides < 3) return;
+    const a = (Math.PI * 2) / sides;
+    ctx.moveTo(x + radius * Math.cos(-Math.PI/2), y + radius * Math.sin(-Math.PI/2));
+    for (let i = 1; i < sides; i++) {
+        ctx.lineTo(x + radius * Math.cos(a * i - Math.PI/2), y + radius * Math.sin(a * i - Math.PI/2));
+    }
+    ctx.closePath();
+}
+
+function drawStar(ctx, cx, cy, spikes, outerRadius, innerRadius) {
+    let rot = Math.PI / 2 * 3;
+    let x = cx;
+    let y = cy;
+    let step = Math.PI / spikes;
+
+    ctx.moveTo(cx, cy - outerRadius);
+    for (let i = 0; i < spikes; i++) {
+        x = cx + Math.cos(rot) * outerRadius;
+        y = cy + Math.sin(rot) * outerRadius;
+        ctx.lineTo(x, y);
+        rot += step;
+
+        x = cx + Math.cos(rot) * innerRadius;
+        y = cy + Math.sin(rot) * innerRadius;
+        ctx.lineTo(x, y);
+        rot += step;
+    }
+    ctx.lineTo(cx, cy - outerRadius);
+    ctx.closePath();
 }
 
 function handleCanvasClick(e) {
@@ -1091,6 +1447,11 @@ function handleCanvasClick(e) {
 }
 
 function handleDoubleClick(e) {
+    if (currentTool === 'poly-lasso' && selectionManager.isBuildingPoly) {
+        selectionManager.closePolySelection();
+        return;
+    }
+
     if (currentTool === 'crop' && selectionManager.hasSelection) {
         // Find crop bounds from mask
         // Simple approach: using selectionManager startX, startY and current mouse (or last update)
@@ -1328,16 +1689,37 @@ function colorsMatch(c1, c2) {
 function setTool(tool) {
     currentTool = tool;
 
+    // Remove active class from all tools
     document.querySelectorAll('.tool').forEach(el => el.classList.remove('active'));
-    const map = {
-        'brush': 0, 'eraser': 1, 'clone': 2, 'move': 3, 'fill': 4, 'gradient': 5, 'wand': 6, 'picker': 7, 'crop': 8,
-        'rect': 9, 'circle': 10, 'line': 11, 'text': 12, 'marquee': 13, 'lasso': 14
-    };
-    if (document.querySelectorAll('.tool')[map[tool]]) {
-        document.querySelectorAll('.tool')[map[tool]].classList.add('active');
-    }
+
+    // Find the tool button that matches this tool and set active
+    // Since we added many tools, the index map is fragile. Better to use title or data attribute.
+    // For now, let's just find by onclick attribute if possible or rely on the user clicking it.
+    // However, setTool is called by onclick, so we can pass 'this' if we change the HTML.
+    // But since we didn't change HTML onclick arguments, let's do a simple lookup.
+
+    const toolButtons = document.querySelectorAll('.tool');
+    toolButtons.forEach(btn => {
+        if (btn.getAttribute('onclick').includes(`'${tool}'`)) {
+            btn.classList.add('active');
+        }
+    });
 
     mainCanvas.style.cursor = getCursorForTool(tool);
+
+    // Update Options Bar Visibility
+    const brushOptions = document.querySelectorAll('.brush-option');
+    const shapeOptions = document.querySelectorAll('.shape-option');
+
+    // Hide all first
+    brushOptions.forEach(el => el.style.display = 'none');
+    shapeOptions.forEach(el => el.style.display = 'none');
+
+    if (['brush', 'eraser'].includes(tool)) {
+        brushOptions.forEach(el => el.style.display = 'inline-block');
+    } else if (['rect', 'circle', 'roundrect', 'triangle', 'rtriangle', 'diamond', 'pentagon', 'hexagon', 'star', 'arrow', 'heart', 'bubble'].includes(tool)) {
+        shapeOptions.forEach(el => el.style.display = 'inline-block');
+    }
 }
 
 function getCursorForTool(tool) {
@@ -1749,6 +2131,14 @@ function transformLayer(type) {
                 renderCanvas();
             }
         }
+    } else if (type === 'flipH') {
+        layer.scaleX *= -1;
+        historyManager.saveState();
+        renderCanvas();
+    } else if (type === 'flipV') {
+        layer.scaleY *= -1;
+        historyManager.saveState();
+        renderCanvas();
     }
 }
 
